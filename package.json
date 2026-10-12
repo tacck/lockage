@@ -5,7 +5,8 @@
   "license": "MIT",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map"
   ],
   "bin": {
     "lockage": "dist/index.js",
@@ -13,6 +14,7 @@
   },
   "scripts": {
     "build": "tsc && cp src/db/schema.sql dist/db/schema.sql",
+    "prepublishOnly": "rm -rf dist && npm run build",
     "dev": "tsx src/index.ts",
     "pretest": "npm run build",
     "test": "node --test --import tsx test/*.test.ts",
