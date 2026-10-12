@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+.kiro/
+.claude/
+
+# lockage runtime state (not source)
+.lockage/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# agent workflow artifacts (not source)
+.agents/

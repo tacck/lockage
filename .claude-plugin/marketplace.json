@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "lockage",
+  "description": "A plugin to use lockage collaborative development with Claude Code",
+  "owner": { "name": "tacck" },
+  "plugins": [
+    {
+      "name": "lockage",
+      "source": "./plugins/claude",
+      "description": "Bundles the coordination rules (AGENTS.md) and the lockage-workflow skill so you can use lockage without placing AGENTS.md / CLAUDE.md in the target repository. On SessionStart it points to where the rules live, and on PreToolUse it interposes a confirmation before edits to the mainline tree.",
+      "category": "development",
+      "keywords": ["lockage", "multi-agent", "worktree", "coordination"]
+    }
+  ]
+}

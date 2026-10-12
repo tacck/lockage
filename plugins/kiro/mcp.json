@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "lockage": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "lockage"
+      ],
+      "disabled": false
+    }
+  }
+}

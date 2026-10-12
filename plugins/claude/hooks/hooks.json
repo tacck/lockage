@@ -1,0 +1,51 @@
+{
+  "description": "On session start, shows the repository state and where the coordination rules (AGENTS.md) live, and interposes a confirmation when an edit to the mainline tree is attempted in a repository running lockage.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y lockage hook session --client claude --agents-md \"${CLAUDE_PLUGIN_ROOT}/AGENTS.md\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y lockage hook session --client claude --agents-md \"${CLAUDE_PLUGIN_ROOT}/AGENTS.md\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y lockage hook guard --client claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y lockage hook guard --client claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

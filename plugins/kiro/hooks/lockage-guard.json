@@ -1,0 +1,23 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "lockage-guard-fs-write",
+      "trigger": "PreToolUse",
+      "matcher": "fs_write",
+      "action": {
+        "type": "command",
+        "command": "npx -y lockage hook guard --client kiro"
+      }
+    },
+    {
+      "name": "lockage-guard-str-replace",
+      "trigger": "PreToolUse",
+      "matcher": "str_replace",
+      "action": {
+        "type": "command",
+        "command": "npx -y lockage hook guard --client kiro"
+      }
+    }
+  ]
+}

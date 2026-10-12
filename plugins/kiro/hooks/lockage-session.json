@@ -1,0 +1,13 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "lockage-session",
+      "trigger": "SessionStart",
+      "action": {
+        "type": "command",
+        "command": "npx -y lockage hook session --client kiro --agents-md \"<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>\""
+      }
+    }
+  ]
+}
