@@ -1,6 +1,6 @@
 {
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "lockage",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "lockage collaborative development. Bundles the coordination rules (AGENTS.md) and the lockage-workflow skill, removing the need for per-repository setup (for Antigravity)."
 }

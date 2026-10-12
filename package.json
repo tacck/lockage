@@ -1,6 +1,6 @@
 {
   "name": "lockage",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Lockage — an MCP server for multiple coding LLMs to collaborate around a local git repository (single host)",
   "license": "MIT",
   "type": "module",
@@ -13,7 +13,7 @@
     "lockage-publish": "dist/launcher/publish-cli.js"
   },
   "scripts": {
-    "build": "tsc && cp src/db/schema.sql dist/db/schema.sql",
+    "build": "tsc && cp src/db/schema.sql dist/db/schema.sql && chmod +x dist/index.js dist/launcher/publish-cli.js",
     "prepublishOnly": "rm -rf dist && npm run build",
     "dev": "tsx src/index.ts",
     "pretest": "npm run build",
