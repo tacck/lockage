@@ -990,9 +990,23 @@ async function main(): Promise<void> {
   process.stderr.write(`[lockage] ready (db=${DB_PATH}, toolsets=${['core', ...toolsets].join(',')})\n`);
 }
 
-// Start only when run as the entry point (do not start when imported from tests)
+// Start only when run as the entry point (do not start when imported from tests).
+// Compare realpath-resolved paths: when launched via a bin symlink (npx / a Node version
+// manager's bin), process.argv[1] is the symlink while import.meta.url resolves to the real
+// file, so a raw string compare never matches and the server would silently never start.
 import { fileURLToPath } from 'node:url';
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+import { realpathSync } from 'node:fs';
+const resolveReal = (p: string): string => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+};
+if (
+  process.argv[1] &&
+  resolveReal(fileURLToPath(import.meta.url)) === resolveReal(process.argv[1])
+) {
   const fatal = (e: unknown) => {
     process.stderr.write(`[lockage] fatal: ${(e as { stack?: string })?.stack ?? e}\n`);
     process.exit(1);
