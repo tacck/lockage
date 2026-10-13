@@ -79,6 +79,19 @@ test('plugins: the Claude Code plugin bundles the lockage MCP server, launched f
   );
 });
 
+test('plugins: the Antigravity plugin bundles the lockage MCP server, launched from the npm-published artifact', () => {
+  // The plugin is copied into ~/.gemini/config/plugins/lockage/ at install, so it cannot point at a local build (dist/) by absolute path.
+  // env is left out so the server inherits LOCKAGE_DB from Antigravity's environment and all agents share the same ledger.
+  const { mcpServers } = JSON.parse(read('plugins/antigravity/mcp_config.json'));
+  assert.deepEqual(Object.keys(mcpServers), ['lockage']);
+  assert.deepEqual(mcpServers.lockage, { command: 'npx', args: ['-y', 'lockage'] });
+  assert.equal(
+    'mcpServers' in JSON.parse(read('plugins/antigravity/plugin.json')),
+    false,
+    'define the MCP server only in mcp_config.json, not also in plugin.json',
+  );
+});
+
 test('plugins: align the version of the Claude Code and Antigravity plugins with the npm package', () => {
   // The plugins launch the npm package with an unpinned npx, so a version that names different contents
   // in the plugin and on npm makes a user's report ambiguous.

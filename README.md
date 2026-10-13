@@ -54,11 +54,11 @@ No clone or build is required. You only add a definition to your MCP client's co
 
 The first run may take a little time to fetch. The DB (ledger) is created at `~/.lockage/lockage.sqlite` by default, so no extra configuration is needed.
 
-To get started you need just two things: **registering with an MCP client** and **distributing the coordination rules** (next section). Line these two up and multi-agent coordination starts working. For Claude Code, installing the plugin (next section) covers both.
+To get started you need just two things: **registering with an MCP client** and **distributing the coordination rules** (next section). Line these two up and multi-agent coordination starts working. For Claude Code and Antigravity, installing the plugin (next section) covers both.
 
 ### Registering with an MCP client
 
-Add a server definition like the following to the MCP configuration of Kiro / Antigravity, and so on; Claude Code needs no registration here (see below). Follow each client's configuration file format (Antigravity uses `~/.gemini/config/mcp_config.json`, and you can also register with `agy mcp add`).
+Add a server definition like the following to the MCP configuration of Kiro, and so on; Claude Code and Antigravity need no registration here (see below). Follow each client's configuration file format.
 
 To Kiro's `mcp.json`, add the following definition that launches the npm-published artifact with `npx` (no clone or `npm run build` is needed; the first run may take a little time to fetch).
 
@@ -74,13 +74,11 @@ To Kiro's `mcp.json`, add the following definition that launches the npm-publish
 }
 ```
 
-The DB (ledger) is stored at `~/.lockage/lockage.sqlite` by default (the parent directory is created automatically). The default is fine; only those who want to change the location add `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` to `lockage`. With the Claude Code plugin, set `LOCKAGE_DB` in the `env` of a Claude Code settings file (usually `~/.claude/settings.json`) instead (see the Claude Code section of [`plugins/README.md`](plugins/README.md#claude-code)).
+The DB (ledger) is stored at `~/.lockage/lockage.sqlite` by default (the parent directory is created automatically). The default is fine; only those who want to change the location add `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` to `lockage`. With the Claude Code plugin, set `LOCKAGE_DB` in the `env` of a Claude Code settings file (usually `~/.claude/settings.json`) instead (see the Claude Code section of [`plugins/README.md`](plugins/README.md#claude-code)). In Antigravity, set `LOCKAGE_DB` in the shell environment from which Antigravity is launched.
 
 When multiple agents coordinate, line everyone up so they **point at the same `LOCKAGE_DB`**. If you leave the default, everyone points at the same default ledger, so no extra configuration is needed. This becomes the shared coordination ledger.
 
-For Claude Code, you do not need to register it here: the lockage plugin (next section) bundles this `npx -y lockage` definition, so installing the plugin registers the server too. If you registered it by hand before, remove that registration (with a different command, two lockage servers line up; with the same command, only the hand registration is kept and the bundled definition goes unused), after moving any `LOCKAGE_DB` in its `env` to the `env` of a Claude Code settings file (usually `~/.claude/settings.json`; for where to move it per scope, see [`plugins/README.md`](plugins/README.md#claude-code)).
-
-For clients such as Antigravity where launching from the npm-published artifact has not been confirmed, clone and `npm run build`, then register with the traditional definition that points `command:node`, `args:["/absolute/path/to/lockage/dist/index.js"]`, and `env.LOCKAGE_DB` (for Antigravity, `agy mcp add --env LOCKAGE_DB=<absolute path to the ledger> lockage node <path to the lockage repository>/dist/index.js`).
+For Claude Code and Antigravity, you do not need to register it here: the lockage plugin (next section) bundles this `npx -y lockage` definition, so installing the plugin registers the server too. If you registered it by hand before, remove that registration (with a different command, two lockage servers line up; with the same command, only the hand registration is kept and the bundled definition goes unused), after moving any `LOCKAGE_DB` in its `env` to the settings file (for Claude Code, usually `~/.claude/settings.json`) or environment variable (for Antigravity; see [`plugins/README.md`](plugins/README.md)).
 
 Do not write `LOCKAGE_TOOLSETS` in an agent's configuration (only the default `core` is visible). Only when a human uses the maintenance/diagnostic tools, add `"LOCKAGE_TOOLSETS": "maintenance"` to the `env` of that MCP client.
 
@@ -104,7 +102,7 @@ Once both registering with an MCP client and distributing these coordination rul
 **The main path is installation via a plugin / Power.** You can load the coordination rules and hooks on the client side without placing anything in the target repository.
 
 - **Claude Code**: register this repository as a marketplace and install the lockage plugin (`plugins/claude`). The plugin also registers the MCP server.
-- **Antigravity**: install with `agy plugin install <local path where you cloned lockage>/plugins/antigravity`.
+- **Antigravity**: install with `agy plugin install <local path where you cloned lockage>/plugins/antigravity`. The plugin also registers the MCP server.
 - **Kiro**: register `plugins/kiro` as a Power and place the hooks into the target's `.kiro/hooks/` (`npx -y lockage setup kiro`).
 
 For the detailed procedure of each, see [`plugins/README.md`](plugins/README.md).

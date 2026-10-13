@@ -54,11 +54,11 @@ clone も build も要りません。MCP クライアントの設定に、npm �
 
 初回は取得に少し時間がかかることがあります。DB（台帳）は既定で `~/.lockage/lockage.sqlite` に作られるので、追加の設定は不要です。
 
-使い始めに必要なのは **MCP クライアントへの登録** と、次節の **協調ルールの配布** の 2 つです。この 2 つをそろえれば、複数エージェントの協調が回り始めます。Claude Code では、次節のプラグインを入れるだけで両方がそろいます。
+使い始めに必要なのは **MCP クライアントへの登録** と、次節の **協調ルールの配布** の 2 つです。この 2 つをそろえれば、複数エージェントの協調が回り始めます。Claude Code・Antigravity では、次節のプラグインを入れるだけで両方がそろいます。
 
 ### MCP クライアントへの登録
 
-Kiro / Antigravity などの MCP 設定に、次のようなサーバ定義を追加します（Claude Code はここでの登録が不要です。下を参照。設定ファイルの書式は各クライアントに従ってください。Antigravity は `~/.gemini/config/mcp_config.json` で、`agy mcp add` でも登録できます）。
+Kiro などの MCP 設定に、次のようなサーバ定義を追加します（Claude Code・Antigravity はここでの登録が不要です。下を参照。設定ファイルの書式は各クライアントに従ってください）。
 
 Kiro の `mcp.json` には、npm 公開物を `npx` で起動する次の定義を追加します（clone や `npm run build` は要りません。初回は取得に少し時間がかかることがあります）。
 
@@ -74,13 +74,11 @@ Kiro の `mcp.json` には、npm 公開物を `npx` で起動する次の定義�
 }
 ```
 
-DB（台帳）の保存先は既定で `~/.lockage/lockage.sqlite` が使われます（親ディレクトリは自動作成されます）。既定のままでよく、場所を変えたい人だけ `lockage` に `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` を足します。Claude Code のプラグインでは、代わりに Claude Code の設定ファイル（通常は `~/.claude/settings.json`）の `env` に `LOCKAGE_DB` を設定します（[`plugins/README_ja.md`](plugins/README_ja.md#claude-code) の Claude Code 節を参照）。
+DB（台帳）の保存先は既定で `~/.lockage/lockage.sqlite` が使われます（親ディレクトリは自動作成されます）。既定のままでよく、場所を変えたい人だけ `lockage` に `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` を足します。Claude Code のプラグインでは、代わりに Claude Code の設定ファイル（通常は `~/.claude/settings.json`）の `env` に `LOCKAGE_DB` を設定します（[`plugins/README_ja.md`](plugins/README_ja.md#claude-code) の Claude Code 節を参照）。Antigravity では、起動するシェルの環境変数に `LOCKAGE_DB` を設定します。
 
 複数のエージェントが協調する場合は、**同じ `LOCKAGE_DB` を指す**ように全員をそろえます。既定のまま使えば全員が同じ既定の台帳を指すので、追加の設定は要りません。これが共有の調整台帳になります。
 
-Claude Code では、ここで登録する必要はありません。lockage プラグイン（次節）がこの `npx -y lockage` の定義を同梱しているので、プラグインを入れればサーバも登録されます。以前に手で登録していた場合は、その登録を外してください（コマンドが違うと lockage サーバが 2 つ並び、同じだと手で登録したほうだけが残って同梱の定義が使われません）。登録の `env` に `LOCKAGE_DB` を書いていたなら、外す前に Claude Code の設定ファイル（通常は `~/.claude/settings.json`）の `env` へ移します（スコープごとの移し先は [`plugins/README_ja.md`](plugins/README_ja.md#claude-code) を参照）。
-
-Antigravity など、まだ npm 公開物での起動を確かめていないクライアントでは、clone して `npm run build` したうえで、`command:node`・`args:["/absolute/path/to/lockage/dist/index.js"]`・`env.LOCKAGE_DB` を指す従来の定義で登録します（Antigravity は `agy mcp add --env LOCKAGE_DB=<台帳の絶対パス> lockage node <lockage のリポジトリのパス>/dist/index.js`）。
+Claude Code・Antigravity では、ここで登録する必要はありません。lockage プラグイン（次節）がこの `npx -y lockage` の定義を同梱しているので、プラグインを入れればサーバも登録されます。以前に手で登録していた場合は、その登録を外してください（コマンドが違うと lockage サーバが 2 つ並び、同じだと手で登録したほうだけが残って同梱の定義が使われません）。登録の `env` に `LOCKAGE_DB` を書いていたなら、外す前に設定ファイル（Claude Code は通常 `~/.claude/settings.json`）や環境変数（Antigravity）へ移します（詳細は [`plugins/README_ja.md`](plugins/README_ja.md) を参照）。
 
 エージェントの設定には `LOCKAGE_TOOLSETS` を書きません（既定の `core` だけが見えます）。保守・診断のツールを人間が使うときだけ、その MCP クライアントの `env` に `"LOCKAGE_TOOLSETS": "maintenance"` を足します。
 
@@ -104,7 +102,7 @@ MCP クライアントへの登録と、この協調ルールの配布の 2 つ�
 **主経路は plugin / Power での導入です。** 導入先リポジトリには何も置かずに、クライアント側で協調ルールとフックを読み込めます。
 
 - **Claude Code**: このリポジトリをマーケットプレイスとして登録し、lockage プラグイン（`plugins/claude`）を入れる。MCP サーバもプラグインが登録する。
-- **Antigravity**: `agy plugin install <lockage をクローンしたローカルのパス>/plugins/antigravity` で入れる。
+- **Antigravity**: `agy plugin install <lockage をクローンしたローカルのパス>/plugins/antigravity` で入れる。MCP サーバもプラグインが登録する。
 - **Kiro**: `plugins/kiro` を Power として登録し、導入先の `.kiro/hooks/` に hook を置く（`npx -y lockage setup kiro`）。
 
 いずれも手順の詳細は [`plugins/README.md`](plugins/README_ja.md) を参照してください。
