@@ -205,7 +205,7 @@ unconfirmed. Until confirmed, clone first and install by path.
     There is no environment variable pointing at the plugin root, so the session hook in `hooks.json` passes the location of AGENTS.md with a path relative to the root,
     like `--agents-md ./AGENTS.md` (the CLI makes it absolute at the working directory).
   - In non-interactive runs (`agy -p`), since there is no one to answer the confirmation, `force_ask` becomes a rejection (`ask` too becomes a rejection if there is no allow rule. Same as when there is no hook. Confirmed on agy 1.3.2).
-- Registering the lockage MCP server itself is not included in the plugin (same reason as the Claude Code version). Register the contents of
+- Registering the lockage MCP server itself is not included in the plugin (whether an Antigravity plugin can bundle an MCP server has not been confirmed). Register the contents of
   "Registering with an MCP client" in the repository-root `README.md` with `agy mcp add` (all agents point at the same ledger. The way to show the ledger to `lockage-publish` is the same as the Claude Code version. Example:
   `agy mcp add --env LOCKAGE_DB=<absolute path to the ledger> lockage node <path to the lockage repository>/dist/index.js`).
   The registration destination is `~/.gemini/config/mcp_config.json`, which Antigravity 2.0, the IDE read too (`agy mcp list` listing

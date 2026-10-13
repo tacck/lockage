@@ -207,7 +207,7 @@ agy は Git の URL からも入れられるとされるが、リポジトリの
     プラグインのルートを指す環境変数は無いので、`hooks.json` の session hook は `--agents-md ./AGENTS.md` のように
     ルートからの相対パスで AGENTS.md の場所を渡す（CLI が作業ディレクトリで絶対化する）。
   - 非対話実行（`agy -p`）では確認に答える人がいないため、`force_ask` は拒否になる（`ask` も、許可ルールが無ければ拒否になる。フックが無いときと同じ。agy 1.3.2 で確認）。
-- lockage MCP サーバ自体の登録はプラグインに含めない（Claude Code 版と同じ理由）。リポジトリ直下の `README.md` の
+- lockage MCP サーバ自体の登録はプラグインに含めない（Antigravity のプラグインが MCP サーバを同梱できるかは未確認のため）。リポジトリ直下の `README.md` の
   「MCP クライアントへの登録」の内容を、`agy mcp add` で登録する（全エージェントで同じ台帳を指すこと。`lockage-publish` に台帳を見せる方法は Claude Code 版と同じ。例:
   `agy mcp add --env LOCKAGE_DB=<台帳の絶対パス> lockage node <lockage のリポジトリのパス>/dist/index.js`）。
   登録先は `~/.gemini/config/mcp_config.json` で、Antigravity 2.0・IDE も同じファイルを読む（`agy mcp list` が
