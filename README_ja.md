@@ -54,11 +54,11 @@ clone も build も要りません。MCP クライアントの設定に、npm �
 
 初回は取得に少し時間がかかることがあります。DB（台帳）は既定で `~/.lockage/lockage.sqlite` に作られるので、追加の設定は不要です。
 
-使い始めに必要なのは **MCP クライアントへの登録** と、次節の **協調ルールの配布** の 2 つです。この 2 つをそろえれば、複数エージェントの協調が回り始めます。
+使い始めに必要なのは **MCP クライアントへの登録** と、次節の **協調ルールの配布** の 2 つです。この 2 つをそろえれば、複数エージェントの協調が回り始めます。Claude Code では、次節のプラグインを入れるだけで両方がそろいます。
 
 ### MCP クライアントへの登録
 
-Kiro / Claude Code / Antigravity などの MCP 設定に、次のようなサーバ定義を追加します（設定ファイルの書式は各クライアントに従ってください。Antigravity は `~/.gemini/config/mcp_config.json` で、`agy mcp add` でも登録できます）。
+Kiro / Antigravity などの MCP 設定に、次のようなサーバ定義を追加します（Claude Code はここでの登録が不要です。下を参照。設定ファイルの書式は各クライアントに従ってください。Antigravity は `~/.gemini/config/mcp_config.json` で、`agy mcp add` でも登録できます）。
 
 Kiro の `mcp.json` には、npm 公開物を `npx` で起動する次の定義を追加します（clone や `npm run build` は要りません。初回は取得に少し時間がかかることがあります）。
 
@@ -74,7 +74,7 @@ Kiro の `mcp.json` には、npm 公開物を `npx` で起動する次の定義�
 }
 ```
 
-DB（台帳）の保存先は既定で `~/.lockage/lockage.sqlite` が使われます（親ディレクトリは自動作成されます）。既定のままでよく、場所を変えたい人だけ `lockage` に `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` を足します。
+DB（台帳）の保存先は既定で `~/.lockage/lockage.sqlite` が使われます（親ディレクトリは自動作成されます）。既定のままでよく、場所を変えたい人だけ `lockage` に `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` を足します。Claude Code のプラグインでは、代わりに Claude Code の `settings.json` の `env` に `LOCKAGE_DB` を設定します（[`plugins/README_ja.md`](plugins/README_ja.md#claude-code) の Claude Code 節を参照）。
 
 複数のエージェントが協調する場合は、**同じ `LOCKAGE_DB` を指す**ように全員をそろえます。既定のまま使えば全員が同じ既定の台帳を指すので、追加の設定は要りません。これが共有の調整台帳になります。
 
@@ -112,7 +112,7 @@ MCP クライアントへの登録と、この協調ルールの配布の 2 つ�
 
 このサーバを MCP 設定に登録しただけでは、エージェントは「いつ・どのツールを・どの順で呼ぶか」を知りません。協調に必要な指示（`AGENTS.md` の協調ルールと lockage-workflow スキル）を各エージェントに届けて初めて、協調ルールのとおりに調整が回り始めます。
 
-> 💡 複数のエージェントを協調させる前提は 2 つだけです。**(a)** 全員の MCP 設定が **同じ `LOCKAGE_DB` の絶対パス**を指していること、**(b)** 各エージェントが **自分だけの一意な `agent_id`** を名乗ること（共通 `AGENTS.md` では事前に書き分けられないので、各エージェントが起動時に自分で決め、board で重複を確認します）。この 2 つが揃えば、協調ルールのとおりに調整が回ります。
+> 💡 複数のエージェントを協調させる前提は 2 つだけです。**(a)** 全員の lockage サーバが **同じ `LOCKAGE_DB` の絶対パス**を指していること（MCP 設定の `env`、またはサーバが引き継ぐ環境変数で指定）、**(b)** 各エージェントが **自分だけの一意な `agent_id`** を名乗ること（共通 `AGENTS.md` では事前に書き分けられないので、各エージェントが起動時に自分で決め、board で重複を確認します）。この 2 つが揃えば、協調ルールのとおりに調整が回ります。
 
 ### 協調フローとツールの対応
 
