@@ -54,11 +54,11 @@ clone も build も要りません。MCP クライアントの設定に、npm �
 
 初回は取得に少し時間がかかることがあります。DB（台帳）は既定で `~/.lockage/lockage.sqlite` に作られるので、追加の設定は不要です。
 
-使い始めに必要なのは **MCP クライアントへの登録** と、次節の **協調ルールの配布** の 2 つです。この 2 つをそろえれば、複数エージェントの協調が回り始めます。
+使い始めに必要なのは **MCP クライアントへの登録** と、次節の **協調ルールの配布** の 2 つです。この 2 つをそろえれば、複数エージェントの協調が回り始めます。Claude Code では、次節のプラグインを入れるだけで両方がそろいます。
 
 ### MCP クライアントへの登録
 
-Kiro / Claude Code / Antigravity などの MCP 設定に、次のようなサーバ定義を追加します（設定ファイルの書式は各クライアントに従ってください。Antigravity は `~/.gemini/config/mcp_config.json` で、`agy mcp add` でも登録できます）。
+Kiro / Antigravity などの MCP 設定に、次のようなサーバ定義を追加します（Claude Code はここでの登録が不要です。下を参照。設定ファイルの書式は各クライアントに従ってください。Antigravity は `~/.gemini/config/mcp_config.json` で、`agy mcp add` でも登録できます）。
 
 Kiro の `mcp.json` には、npm 公開物を `npx` で起動する次の定義を追加します（clone や `npm run build` は要りません。初回は取得に少し時間がかかることがあります）。
 
@@ -74,13 +74,26 @@ Kiro の `mcp.json` には、npm 公開物を `npx` で起動する次の定義�
 }
 ```
 
-DB（台帳）の保存先は既定で `~/.lockage/lockage.sqlite` が使われます（親ディレクトリは自動作成されます）。既定のままでよく、場所を変えたい人だけ `lockage` に `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` を足します。
+DB（台帳）の保存先は既定で `~/.lockage/lockage.sqlite` が使われます（親ディレクトリは自動作成されます）。既定のままでよく、場所を変えたい人だけ `lockage` に `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` を足します。Claude Code のプラグインでは、代わりに Claude Code の設定ファイル（通常は `~/.claude/settings.json`）の `env` に `LOCKAGE_DB` を設定します（[`plugins/README_ja.md`](plugins/README_ja.md#claude-code) の Claude Code 節を参照）。
 
 複数のエージェントが協調する場合は、**同じ `LOCKAGE_DB` を指す**ように全員をそろえます。既定のまま使えば全員が同じ既定の台帳を指すので、追加の設定は要りません。これが共有の調整台帳になります。
 
-Claude Code / Antigravity など、まだ npm 公開物での起動を確かめていないクライアントでは、clone して `npm run build` したうえで、`command:node`・`args:["/absolute/path/to/lockage/dist/index.js"]`・`env.LOCKAGE_DB` を指す従来の定義で登録します（Antigravity は `agy mcp add --env LOCKAGE_DB=<台帳の絶対パス> lockage node <lockage のリポジトリのパス>/dist/index.js`）。
+Claude Code では、ここで登録する必要はありません。lockage プラグイン（次節）がこの `npx -y lockage` の定義を同梱しているので、プラグインを入れればサーバも登録されます。以前に手で登録していた場合は、その登録を外してください（コマンドが違うと lockage サーバが 2 つ並び、同じだと手で登録したほうだけが残って同梱の定義が使われません）。登録の `env` に `LOCKAGE_DB` を書いていたなら、外す前に Claude Code の設定ファイル（通常は `~/.claude/settings.json`）の `env` へ移します（スコープごとの移し先は [`plugins/README_ja.md`](plugins/README_ja.md#claude-code) を参照）。
+
+Antigravity など、まだ npm 公開物での起動を確かめていないクライアントでは、clone して `npm run build` したうえで、`command:node`・`args:["/absolute/path/to/lockage/dist/index.js"]`・`env.LOCKAGE_DB` を指す従来の定義で登録します（Antigravity は `agy mcp add --env LOCKAGE_DB=<台帳の絶対パス> lockage node <lockage のリポジトリのパス>/dist/index.js`）。
 
 エージェントの設定には `LOCKAGE_TOOLSETS` を書きません（既定の `core` だけが見えます）。保守・診断のツールを人間が使うときだけ、その MCP クライアントの `env` に `"LOCKAGE_TOOLSETS": "maintenance"` を足します。
+
+Claude Code のプラグインでは同梱のサーバが `env` を持たないので、人間が使う場所にだけ保守用のサーバを別に登録し、使い終わったら外します。
+
+```bash
+claude mcp add lockage-maint -s local -e LOCKAGE_TOOLSETS=maintenance -- npx -y lockage@latest
+claude mcp remove lockage-maint -s local
+```
+
+コマンドは同梱のもの（`npx -y lockage`）と変えてください（ここでは `lockage@latest`。同梱のサーバが動かしている版より新しくなることがあります）。Claude Code は名前や `env` が違ってもコマンドが同じサーバを 1 つにまとめるので、`npx -y lockage` で登録すると同梱のサーバが置き換わり、そのセッションには保守用のサーバだけが残ります（Claude Code 2.1.285 で確認）。
+
+このサーバは保守用のツールに加えて core のツールも `mcp__lockage-maint__*` として出します（lockage 0.9.2 で 31 個、確認済み）。そのため登録している間は、lockage-worker が 2 つ目の lockage サーバを見つけて「failed」で返します。外すまでワーカーを起動しないでください。`LOCKAGE_DB` は同梱のサーバと同じく Claude Code が MCP サーバに渡す環境から読むので、設定の `env` に置いた台帳を指します（このサーバでは試していません）。
 
 ---
 
@@ -90,7 +103,7 @@ MCP クライアントへの登録と、この協調ルールの配布の 2 つ�
 
 **主経路は plugin / Power での導入です。** 導入先リポジトリには何も置かずに、クライアント側で協調ルールとフックを読み込めます。
 
-- **Claude Code**: このリポジトリをマーケットプレイスとして登録し、lockage プラグイン（`plugins/claude`）を入れる。
+- **Claude Code**: このリポジトリをマーケットプレイスとして登録し、lockage プラグイン（`plugins/claude`）を入れる。MCP サーバもプラグインが登録する。
 - **Antigravity**: `agy plugin install <lockage をクローンしたローカルのパス>/plugins/antigravity` で入れる。
 - **Kiro**: `plugins/kiro` を Power として登録し、導入先の `.kiro/hooks/` に hook を置く（`npx -y lockage setup kiro`）。
 
@@ -102,7 +115,7 @@ MCP クライアントへの登録と、この協調ルールの配布の 2 つ�
 
 このサーバを MCP 設定に登録しただけでは、エージェントは「いつ・どのツールを・どの順で呼ぶか」を知りません。協調に必要な指示（`AGENTS.md` の協調ルールと lockage-workflow スキル）を各エージェントに届けて初めて、協調ルールのとおりに調整が回り始めます。
 
-> 💡 複数のエージェントを協調させる前提は 2 つだけです。**(a)** 全員の MCP 設定が **同じ `LOCKAGE_DB` の絶対パス**を指していること、**(b)** 各エージェントが **自分だけの一意な `agent_id`** を名乗ること（共通 `AGENTS.md` では事前に書き分けられないので、各エージェントが起動時に自分で決め、board で重複を確認します）。この 2 つが揃えば、協調ルールのとおりに調整が回ります。
+> 💡 複数のエージェントを協調させる前提は 2 つだけです。**(a)** 全員の lockage サーバが **同じ `LOCKAGE_DB` の絶対パス**を指していること（MCP 設定の `env`、またはサーバが引き継ぐ環境変数で指定）、**(b)** 各エージェントが **自分だけの一意な `agent_id`** を名乗ること（共通 `AGENTS.md` では事前に書き分けられないので、各エージェントが起動時に自分で決め、board で重複を確認します）。この 2 つが揃えば、協調ルールのとおりに調整が回ります。
 
 ### 協調フローとツールの対応
 

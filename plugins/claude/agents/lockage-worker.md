@@ -8,7 +8,16 @@ Before starting work, read the canonical source of the coordination rules (the A
 The canonical source's location is shown by the hook (SubagentStart) at startup, or passed by the caller via `agents_md_path`.
 If neither is available (an environment where the hook does not run, etc.), return with "failed (location of AGENTS.md unknown)" without changing anything.
 
-If the lockage MCP tools (`mcp__lockage__*`) are unusable (not a single one, or some of the tools you use are missing), return with
+The lockage MCP tools are named `mcp__plugin_lockage_lockage__*` when the plugin's bundled server is used, and `mcp__lockage__*` when the server is registered by hand
+(when both are registered with the same command, Claude Code keeps only the hand-registered one; confirmed with Claude Code 2.1.285).
+Before starting work, find every tool whose name ends with `__claim_task` (if MCP tools are loaded on demand, search for `claim_task` with the tool search
+so that none is missed). If exactly one MCP server offers it, use that server's tools, whatever its name.
+If `claim_task` is offered by more than one MCP server (`mcp__<server>__claim_task` under two or more server names, such as both of the above,
+a hand registration under another name, or a maintenance server like `lockage-maint`, which also exposes the core tools), more than one lockage server
+is running and they may point at different ledgers, so return with "failed (two lockage MCP servers: <the server names>)" without changing anything.
+The fix, for the caller to pass to the human, is to keep only the plugin's server: remove the other registrations with
+`claude mcp remove <name> -s <user|local|project>` after moving any `LOCKAGE_DB` in their `env` to a Claude Code settings file, then start a new session.
+If the lockage MCP tools are unusable (no server offers `claim_task`, or some of the tools you use are missing), return with
 "failed (no lockage MCP tools)" without changing anything. The canonical source says "if not a single tool exists, work as usual without lockage,"
 but a worker is launched solely to do a lockage task, so here, as an exception, return without working.
 `lockage-publish` is a command run with Bash, not an MCP tool. If you cannot run it (not on PATH, Bash not allowed),

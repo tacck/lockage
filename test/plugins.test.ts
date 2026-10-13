@@ -66,10 +66,27 @@ test('sync-plugins: a distributed manifest checked out with CRLF is also conside
   assert.deepEqual(leftovers(base), []);
 });
 
-test('plugins: align the version of the Claude Code and Antigravity plugins', () => {
-  const version = (path: string): string => JSON.parse(read(path)).version;
+test('plugins: the Claude Code plugin bundles the lockage MCP server, launched from the npm-published artifact', () => {
+  // The plugin is copied into the cache at install, so it cannot point at a local build (dist/) by absolute path.
+  // env is left out so the server inherits LOCKAGE_DB from Claude Code's environment and all agents share the same ledger.
+  const { mcpServers } = JSON.parse(read('plugins/claude/.mcp.json'));
+  assert.deepEqual(Object.keys(mcpServers), ['lockage']);
+  assert.deepEqual(mcpServers.lockage, { command: 'npx', args: ['-y', 'lockage'] });
   assert.equal(
-    version('plugins/antigravity/plugin.json'),
-    version('plugins/claude/.claude-plugin/plugin.json'),
+    'mcpServers' in JSON.parse(read('plugins/claude/.claude-plugin/plugin.json')),
+    false,
+    'define the MCP server only in .mcp.json, not also in plugin.json',
   );
+});
+
+test('plugins: align the version of the Claude Code and Antigravity plugins with the npm package', () => {
+  // The plugins launch the npm package with an unpinned npx, so a version that names different contents
+  // in the plugin and on npm makes a user's report ambiguous.
+  const version = (path: string): string => JSON.parse(read(path)).version;
+  const plugin = version('plugins/claude/.claude-plugin/plugin.json');
+  assert.equal(version('plugins/antigravity/plugin.json'), plugin);
+  assert.equal(version('package.json'), plugin, 'bump package.json together with the plugins');
+  const lock = JSON.parse(read('package-lock.json'));
+  assert.equal(lock.version, plugin, 'update package-lock.json too (npm install)');
+  assert.equal(lock.packages[''].version, plugin, 'update package-lock.json too (npm install)');
 });

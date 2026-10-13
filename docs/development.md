@@ -43,6 +43,14 @@ npm run dev
 - The DB location can be specified with the environment variable `LOCKAGE_DB` (default `~/.lockage/lockage.sqlite`). It is a home absolute path on the premise that the cross-cutting ledger is a single global one. The parent directory is created automatically.
 - The exposed tool sets can be selected with the environment variable `LOCKAGE_TOOLSETS` (the default is only the agent-facing `core`. See "Provided tools" in the README). Writing an unknown set name makes startup fail.
 - Standard output is JSON-RPC only. Startup logs and errors go to standard error.
+- **When you develop lockage with the lockage plugin installed** (a Claude Code session opened in this repository or one of its worktrees), the plugin's
+  `npx -y lockage` (both the MCP server and the hooks) resolves to this working tree's `dist/`, not the npm-published artifact, because the current
+  project's own package is named `lockage` (confirmed with npm 11.19.0 and Claude Code 2.1.285). Run `npm run build` in that tree before starting
+  the session; without `dist/` the server fails to start, and an old build runs old code.
+  The running server keeps the code it started with, while the hooks load the current `dist/` on every call, so after a rebuild during a session
+  (including the one `npm test` does in `pretest`) the hooks run the new code and the MCP tools the old code. Restart the session only when you want
+  to try a change to the server (the MCP tools) in it. `npm run build` does not delete `dist/`; only `prepublishOnly` (`rm -rf dist`) does, and the
+  hooks fail until it finishes.
 
 For the MCP-client registration procedure (user-facing), see [Registering with an MCP client](../README.md#registering-with-an-mcp-client) in the README.
 
@@ -91,7 +99,7 @@ lockage/
 │       └── publish-cli.ts the lockage-publish entry
 ├── plugins/              each client's plugin (each a self-contained plugin root)
 │   ├── shared/            the canonical source (AGENTS.md, the lockage-workflow skill, the shared hook judgment). npm run sync:plugins copies it to each plugin
-│   ├── claude/            the Claude Code plugin (hooks, the lockage-worker agent)
+│   ├── claude/            the Claude Code plugin (the MCP server definition .mcp.json, hooks, the lockage-worker agent)
 │   ├── antigravity/       the Antigravity plugin (hooks)
 │   └── kiro/              the Kiro Power (POWER.md, steering, the mcp.json template, the hook templates)
 ├── scripts/sync-plugins.ts  copies the canonical source in plugins/shared/ to each plugin (--check detects divergence)
