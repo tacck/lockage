@@ -144,8 +144,11 @@ While private, only people with git-clone authentication can register.
 - Delete the skill that an earlier procedure placed in `~/.claude/skills/lockage-workflow/`, since it duplicates the plugin's skill.
 - Verification: at the start of a new session, confirm that the context "lockage coordinated development (lockage plugin)" is injected and that
   `plugin:lockage:lockage` shows as connected in `/mcp`. If the injection does not appear, confirm whether `npx` can resolve lockage and whether you launched outside a git repository.
-  If `plugin:lockage:lockage` is `failed` in `/mcp`, run `npx -y lockage hook session --client claude </dev/null` once in a terminal (exit 0 means it launched) to see whether npx can fetch
-  and launch lockage (network, registry, Node.js `>= 22.5`), then start a new session. The first launch with an empty npx cache connected in about
+  If `plugin:lockage:lockage` is `failed` in `/mcp`, start the server itself once in a terminal, in a directory outside the lockage repository
+  (inside it, npx runs the working tree's `dist/` instead of the published artifact), with the same `LOCKAGE_DB` you set in the settings `env`, if any:
+  `LOCKAGE_DB=<the value> npx -y lockage </dev/null`. If standard error shows `[lockage] ready (db=..., toolsets=...)` and it exits 0 when stdin closes,
+  npx can fetch and launch the server; `[lockage] fatal: ...` or a non-zero exit shows why it fails (network, registry, Node.js `>= 22.5`,
+  an unwritable DB path, an invalid `LOCKAGE_TOOLSETS`). Then start a new session. The first launch with an empty npx cache connected in about
   6 seconds on a real machine (2026-10-13), within Claude Code's MCP startup timeout; on a slow network, raise it with the `MCP_TIMEOUT` environment variable (milliseconds).
 
 **How to use lockage-worker (subagent)**: the main session launches it with the Agent tool.
