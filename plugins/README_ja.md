@@ -152,7 +152,7 @@ claude plugin install lockage@lockage
 - 動作確認: 新しいセッションの最初に「lockage 協調開発（lockage プラグイン）」の文脈が注入されること、
   `/mcp` に `plugin:lockage:lockage` が接続済みで出ることを確かめる。注入が出なければ `npx` が lockage を解決できているか、git リポジトリの外で起動していないかを確かめる。
   `/mcp` で `plugin:lockage:lockage` が `failed` なら、lockage のリポジトリの外のディレクトリで、端末からサーバそのものを 1 回起動する
-  （リポジトリの中では、npx が公開物ではなく作業ツリーの `dist/` を起動するため）。設定の `env` に `LOCKAGE_DB` を置いているなら同じ値を付ける:
+  （リポジトリの中では、npx が公開物ではなく作業ツリーの `dist/` を起動するため）。設定の `env` に lockage 用の変数（`LOCKAGE_DB`、置いていれば `LOCKAGE_TOOLSETS`）を置いているなら、同じ値を付ける:
   `LOCKAGE_DB=<その値> npx -y lockage </dev/null`。標準エラー出力に `[lockage] ready (db=..., toolsets=...)` が出て、標準入力が閉じたところで
   exit 0 で終われば、npx はサーバを取得・起動できている。`[lockage] fatal: ...` が出るか exit 0 以外で終わったら、それが失敗の理由である
   （ネットワーク、レジストリ、Node.js `>= 22.5`、DB の場所に書き込めない、`LOCKAGE_TOOLSETS` が不正など）。確かめたら新しいセッションを始める。npx のキャッシュが空の状態からの

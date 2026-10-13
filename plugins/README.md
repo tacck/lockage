@@ -150,7 +150,7 @@ While private, only people with git-clone authentication can register.
 - Verification: at the start of a new session, confirm that the context "lockage coordinated development (lockage plugin)" is injected and that
   `plugin:lockage:lockage` shows as connected in `/mcp`. If the injection does not appear, confirm whether `npx` can resolve lockage and whether you launched outside a git repository.
   If `plugin:lockage:lockage` is `failed` in `/mcp`, start the server itself once in a terminal, in a directory outside the lockage repository
-  (inside it, npx runs the working tree's `dist/` instead of the published artifact), with the same `LOCKAGE_DB` you set in the settings `env`, if any:
+  (inside it, npx runs the working tree's `dist/` instead of the published artifact), with the same lockage variables you set in the settings `env`, if any (`LOCKAGE_DB`, and `LOCKAGE_TOOLSETS` if set):
   `LOCKAGE_DB=<the value> npx -y lockage </dev/null`. If standard error shows `[lockage] ready (db=..., toolsets=...)` and it exits 0 when stdin closes,
   npx can fetch and launch the server; `[lockage] fatal: ...` or a non-zero exit shows why it fails (network, registry, Node.js `>= 22.5`,
   an unwritable DB path, an invalid `LOCKAGE_TOOLSETS`). Then start a new session. The first launch with an empty npx cache connected in about
