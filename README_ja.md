@@ -78,7 +78,7 @@ DB（台帳）の保存先は既定で `~/.lockage/lockage.sqlite` が使われ�
 
 複数のエージェントが協調する場合は、**同じ `LOCKAGE_DB` を指す**ように全員をそろえます。既定のまま使えば全員が同じ既定の台帳を指すので、追加の設定は要りません。これが共有の調整台帳になります。
 
-Claude Code では、ここで登録する必要はありません。lockage プラグイン（次節）がこの `npx -y lockage` の定義を同梱しているので、プラグインを入れればサーバも登録されます。以前に手で登録していた場合は、サーバが 2 つ並ばないよう `claude mcp remove lockage -s user` で外してください（[`plugins/README.md`](plugins/README_ja.md#claude-code) を参照）。
+Claude Code では、ここで登録する必要はありません。lockage プラグイン（次節）がこの `npx -y lockage` の定義を同梱しているので、プラグインを入れればサーバも登録されます。以前に手で登録していた場合は、サーバが 2 つ並ばないよう、その登録を外してください。登録の `env` に `LOCKAGE_DB` を書いていたなら、外す前に Claude Code の `settings.json` の `env` へ移します（スコープごとの手順は [`plugins/README.md`](plugins/README_ja.md#claude-code) を参照）。
 
 Antigravity など、まだ npm 公開物での起動を確かめていないクライアントでは、clone して `npm run build` したうえで、`command:node`・`args:["/absolute/path/to/lockage/dist/index.js"]`・`env.LOCKAGE_DB` を指す従来の定義で登録します（Antigravity は `agy mcp add --env LOCKAGE_DB=<台帳の絶対パス> lockage node <lockage のリポジトリのパス>/dist/index.js`）。
 

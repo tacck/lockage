@@ -118,7 +118,10 @@ While private, only people with git-clone authentication can register.
   (the same as the hooks). Installing the plugin registers the server, so no separate `claude mcp add` is needed.
   In `/mcp` it shows as `plugin:lockage:lockage`, and its tools are named `mcp__plugin_lockage_lockage__*` (a hand-registered server's are `mcp__lockage__*`).
 - **If you registered the server by hand before** (`claude mcp add lockage ...`), remove it with `claude mcp remove lockage -s user`
-  (and `-s local` / `-s project` where you registered it per project). Claude Code merges MCP servers that have the same command:
+  (and `-s local` / `-s project` where you registered it per project).
+  If that registration had `env` (`LOCKAGE_DB` in particular), first check it with `claude mcp get lockage` and move it to the `env` of `settings.json`
+  (below) before removing; otherwise the ledger silently falls back to the default and this client stops seeing the other agents' tasks.
+  Claude Code merges MCP servers that have the same command:
   if the hand-registered one uses the same command (`npx -y lockage`), only the hand-registered one is kept, even when its name or `env` differs;
   if the command differs (such as `node <clone>/dist/index.js`), both are registered and two lockage servers line up.
 - The bundled definition does not set `env`, so the ledger is the default `~/.lockage/lockage.sqlite`. To place it elsewhere,

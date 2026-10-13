@@ -120,7 +120,10 @@ claude plugin install lockage@lockage
   （フックと同じ）。プラグインを入れればサーバも登録されるので、別途 `claude mcp add` する必要はない。
   `/mcp` には `plugin:lockage:lockage` として出て、ツール名は `mcp__plugin_lockage_lockage__*` になる（手で登録したサーバでは `mcp__lockage__*`）。
 - **以前に手でサーバを登録していた場合**（`claude mcp add lockage ...`）は、`claude mcp remove lockage -s user` で外す
-  （プロジェクトごとに登録していたなら、そこで `-s local` / `-s project`）。Claude Code はコマンドが同じ MCP サーバを 1 つにまとめる。
+  （プロジェクトごとに登録していたなら、そこで `-s local` / `-s project`）。
+  その登録に `env`（特に `LOCKAGE_DB`）を書いていたなら、外す前に `claude mcp get lockage` で確かめ、`settings.json` の `env`（下の項目）に移しておく。
+  移さずに外すと台帳が黙って既定に戻り、このクライアントだけほかのエージェントのタスクが見えなくなる。
+  Claude Code はコマンドが同じ MCP サーバを 1 つにまとめる。
   手で登録したものが同じコマンド（`npx -y lockage`）なら、名前や `env` が違っても手で登録したほうだけが残る。
   コマンドが違う（`node <clone>/dist/index.js` など）と両方が登録され、lockage サーバが 2 つ並ぶ。
 - 同梱の定義は `env` を持たないので、台帳は既定の `~/.lockage/lockage.sqlite` になる。別の場所に置くときは、
