@@ -137,6 +137,9 @@ claude plugin install lockage@lockage
 - 以前の手順で `~/.claude/skills/lockage-workflow/` に置いたスキルは、プラグインのスキルと重複するので削除する。
 - 動作確認: 新しいセッションの最初に「lockage 協調開発（lockage プラグイン）」の文脈が注入されること、
   `/mcp` に `plugin:lockage:lockage` が接続済みで出ることを確かめる。注入が出なければ `npx` が lockage を解決できているか、git リポジトリの外で起動していないかを確かめる。
+  `/mcp` で `plugin:lockage:lockage` が `failed` なら、端末で `npx -y lockage hook session --client claude </dev/null` を 1 回実行して（exit 0 なら起動できている）、npx が lockage を
+  取得・起動できるか（ネットワーク、レジストリ、Node.js `>= 22.5`）を確かめてから、新しいセッションを始める。npx のキャッシュが空の状態からの
+  初回起動は、実機（2026-10-13）では約 6 秒で接続でき、Claude Code の MCP 起動タイムアウトに収まった。遅い回線では環境変数 `MCP_TIMEOUT`（ミリ秒）で延ばす。
 
 **lockage-worker（サブエージェント）の使い方**: メインセッションが Agent ツールで起動する。
 - 渡すもの: `repo_path`、`task_id` か `ticket_id`。中断したタスクを再開させるときは前回の `agent_id` と、

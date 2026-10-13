@@ -135,6 +135,9 @@ While private, only people with git-clone authentication can register.
 - Delete the skill that an earlier procedure placed in `~/.claude/skills/lockage-workflow/`, since it duplicates the plugin's skill.
 - Verification: at the start of a new session, confirm that the context "lockage coordinated development (lockage plugin)" is injected and that
   `plugin:lockage:lockage` shows as connected in `/mcp`. If the injection does not appear, confirm whether `npx` can resolve lockage and whether you launched outside a git repository.
+  If `plugin:lockage:lockage` is `failed` in `/mcp`, run `npx -y lockage hook session --client claude </dev/null` once in a terminal (exit 0 means it launched) to see whether npx can fetch
+  and launch lockage (network, registry, Node.js `>= 22.5`), then start a new session. The first launch with an empty npx cache connected in about
+  6 seconds on a real machine (2026-10-13), within Claude Code's MCP startup timeout; on a slow network, raise it with the `MCP_TIMEOUT` environment variable (milliseconds).
 
 **How to use lockage-worker (subagent)**: the main session launches it with the Agent tool.
 - What to pass: `repo_path`, and `task_id` or `ticket_id`. To resume an interrupted task, pass the previous `agent_id` and
