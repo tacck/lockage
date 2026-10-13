@@ -116,6 +116,7 @@ While private, only people with git-clone authentication can register.
   (how a confirmation is handled in a non-interactive run depends on Claude Code's permission settings, so confirm before using it in a headless worker).
 - The plugin bundles the lockage MCP server definition in `plugins/claude/.mcp.json`, which launches the npm-published artifact with `npx -y lockage`
   (the same as the hooks). Installing the plugin registers the server, so no separate `claude mcp add` is needed.
+  The version is not pinned: the server is the published lockage that npx resolves (normally the latest), not one tied to the plugin's `version`.
   In `/mcp` it shows as `plugin:lockage:lockage`, and its tools are named `mcp__plugin_lockage_lockage__*` (a hand-registered server's are `mcp__lockage__*`).
   If your own `permissions.allow` or hook `matcher` names lockage tools as `mcp__lockage__...`, rewrite them to `mcp__plugin_lockage_lockage__...` when you switch
   (the bundled AGENTS.md and skill refer to tools by their bare names such as `claim_task`, so they need no change).
