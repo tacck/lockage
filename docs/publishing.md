@@ -2,7 +2,7 @@
 
 > 日本語版: [publishing_ja.md](publishing_ja.md)
 
-This document gathers the operational details of the separate bin `lockage-publish`, which picks up `ticket_ready`, pushes the integration branch, and publishes a PR. For the user-facing overview, see [`../README.md`](../README.md); for how to develop, build, and test lockage itself, see [`./development.md`](./development.md).
+This document gathers the operational details of the separate bin `lockage-publish`, which picks up `ticket_ready`, pushes the integration branch, and publishes a PR. This is **not** about releasing the npm package — for that (`npm publish`, the version-bump rule), see [`./releasing.md`](./releasing.md); the two share the word "publish" but are unrelated operations. For the user-facing overview, see [`../README.md`](../README.md); for how to develop, build, and test lockage itself, see [`./development.md`](./development.md).
 
 ## Overview
 

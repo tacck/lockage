@@ -166,8 +166,14 @@ function readPackageVersion(): string {
     const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown };
     if (typeof pkg.version === 'string' && pkg.version.length > 0) return pkg.version;
-  } catch {
-    // ignore and fall through to the fallback
+  } catch (e) {
+    // Reaching here means the build layout is broken (package.json is expected one level up
+    // from this file in both dev and dist). Warn on stderr rather than silently reporting a
+    // bogus version — the whole point (#3) is that the reported version is trustworthy.
+    // stdout is reserved for JSON-RPC, so write only to stderr.
+    process.stderr.write(
+      `[lockage] warning: could not read version from package.json, falling back to 0.0.0 (${String(e)})\n`,
+    );
   }
   return '0.0.0';
 }
