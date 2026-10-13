@@ -91,7 +91,7 @@ claude mcp add lockage-maint -s local -e LOCKAGE_TOOLSETS=maintenance -- npx -y 
 claude mcp remove lockage-maint -s local
 ```
 
-コマンドは同梱のもの（`npx -y lockage`）と変えてください（ここでは `lockage@latest`）。Claude Code は名前や `env` が違ってもコマンドが同じサーバを 1 つにまとめるので、`npx -y lockage` で登録すると同梱のサーバが置き換わり、lockage-worker がツールを見つけられなくなります（Claude Code 2.1.285 で確認）。
+コマンドは同梱のもの（`npx -y lockage`）と変えてください（ここでは `lockage@latest`。同梱のサーバが動かしている版より新しくなることがあります）。Claude Code は名前や `env` が違ってもコマンドが同じサーバを 1 つにまとめるので、`npx -y lockage` で登録すると同梱のサーバが置き換わり、lockage-worker がツールを見つけられなくなります（Claude Code 2.1.285 で確認）。
 このサーバは保守用のツールに加えて core のツールも `mcp__lockage-maint__*` として出します（31 個、確認済み）。そのため登録している間は、lockage-worker が 2 つ目の lockage サーバを見つけて「failed」で返します。外すまでワーカーを起動しないでください。
 
 ---

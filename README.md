@@ -91,7 +91,7 @@ claude mcp add lockage-maint -s local -e LOCKAGE_TOOLSETS=maintenance -- npx -y 
 claude mcp remove lockage-maint -s local
 ```
 
-Give it a command different from the bundled one (here `lockage@latest`). Claude Code merges servers with the same command even when their names and `env` differ, so registering it with `npx -y lockage` would replace the bundled server, and lockage-worker would no longer find its tools (confirmed with Claude Code 2.1.285).
+Give it a command different from the bundled one (here `lockage@latest`, which can be newer than the version the bundled server runs). Claude Code merges servers with the same command even when their names and `env` differ, so registering it with `npx -y lockage` would replace the bundled server, and lockage-worker would no longer find its tools (confirmed with Claude Code 2.1.285).
 This server exposes the core tools as well as the maintenance ones, as `mcp__lockage-maint__*` (31 tools, confirmed), so while it is registered
 lockage-worker sees a second lockage server and returns "failed"; do not launch workers until you remove it.
 
