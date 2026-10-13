@@ -124,17 +124,21 @@ claude plugin install lockage@lockage
   （同梱の AGENTS.md とスキルは `claim_task` のような素のツール名で書いているので、直す必要はない）。
 - **以前に手でサーバを登録していた場合**（`claude mcp add lockage ...`）は、`claude mcp remove lockage -s user` で外す
   （プロジェクトごとに登録していたなら、そこで `-s local` / `-s project`）。
-  その登録に `env`（特に `LOCKAGE_DB`）を書いていたなら、外す前に `claude mcp get lockage` で確かめ、`settings.json` の `env`（下の項目）に移しておく。
+  その登録に `env`（特に `LOCKAGE_DB`）を書いていたなら、外す前に `claude mcp get lockage` で確かめ、設定ファイルの `env` に移しておく。
   移さずに外すと台帳が黙って既定に戻り、このクライアントだけほかのエージェントのタスクが見えなくなる。
+  移す先は登録のスコープに合わせる。`-s user` なら `~/.claude/settings.json`、
+  `-s local` / `-s project` ならそのプロジェクトの `.claude/settings.local.json`（チームで共有するなら `.claude/settings.json`）。
+  迷ったら `~/.claude/settings.json` にする。全エージェントで 1 つの台帳を共有するので、ユーザー全体で 1 つの値にするのが普通の使い方である。
   Claude Code はコマンドが同じ MCP サーバを 1 つにまとめる。
   手で登録したものが同じコマンド（`npx -y lockage`）なら、名前や `env` が違っても手で登録したほうだけが残る。
   コマンドが違う（`node <clone>/dist/index.js` など）と両方が登録され、lockage サーバが 2 つ並ぶ。
 - 同梱の定義は `env` を持たないので、台帳は既定の `~/.lockage/lockage.sqlite` になる。別の場所に置くときは、
-  Claude Code の `settings.json` の `env`（または Claude Code を起動するシェルの環境変数）に `LOCKAGE_DB` を設定する。サーバはそれを引き継ぐ。
+  Claude Code の設定ファイル（スコープは上の項目を参照）の `env`、または Claude Code を起動するシェルの環境変数に `LOCKAGE_DB` を設定する。サーバはそれを引き継ぐ。
   全エージェントで同じ台帳を指すこと。
 - 実機で確認したこと（Claude Code 2.1.285、2026-10-13、`--plugin-dir` でプラグインを読み込んで確認）: 上のサーバ名とツール名。
-  コマンドが同じサーバが上のとおり 1 つにまとめられ、手で登録したほうが残ること。シェルの環境変数か、設定の `env`（`--settings` で指定）に
-  置いた `LOCKAGE_DB` が同梱のサーバに届くこと（そのパスに DB ファイルが作られた）。
+  コマンドが同じサーバが上のとおり 1 つにまとめられ、手で登録したほうが残ること。シェルの環境変数か、設定の `env`（`--settings` で指定したもの、
+  プロジェクトの `.claude/settings.json` と `.claude/settings.local.json`）に置いた `LOCKAGE_DB` が同梱のサーバに届くこと（そのパスに DB ファイルが作られた）。
+  `~/.claude/settings.json` そのものは、利用者自身の設定を変えないよう試していない。
   `lockage-publish` は別のコマンドで、`LOCKAGE_DB` を MCP サーバからではなく、実行した環境から読む。
   台帳を既定以外に置いたときは、実行する場所で `--db` を付ける（またはシェルの環境変数 `LOCKAGE_DB` を設定する）。
   特に Claude Code の外の端末には `settings.json` の `env` が無い
