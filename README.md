@@ -42,70 +42,46 @@ lockage is an MCP server that provides atomic claim, dependency DAG, ticket mana
 
 ## Setup
 
-No clone or build is required. You only add a definition to your MCP client's configuration that launches the npm-published artifact with `npx` (for the concrete configuration, see "[Registering with an MCP client](#registering-with-an-mcp-client)" below).
+Setup is per client: install the lockage plugin / Power for the client you use. Each plugin bundles both the **coordination rules** (`AGENTS.md` and the lockage-workflow skill) and the **lockage MCP server definition** (`npx -y lockage`), so a single install lines up the two prerequisites for multi-agent coordination — the server and the rules — in one step. No clone or `npm run build` is needed (the first run may take a little time to fetch).
 
-```json
-{
-  "mcpServers": {
-    "lockage": { "command": "npx", "args": ["-y", "lockage"] }
-  }
-}
-```
+For the detailed install procedure of each client, see [`plugins/README.md`](plugins/README.md). The MCP server registration details (changing the ledger location via `LOCKAGE_DB`, the maintenance tool set, removing a hand registration) are collected in [`docs/mcp-registration.md`](docs/mcp-registration.md).
 
-The first run may take a little time to fetch. The DB (ledger) is created at `~/.lockage/lockage.sqlite` by default, so no extra configuration is needed.
+> After installing, distribute the coordination rules as the next section describes — for Claude Code and Antigravity this is covered by the plugin install itself; for environments that cannot use a plugin / Power, see "[Distributing the coordination rules](#distributing-the-coordination-rules)".
 
-To get started you need just two things: **registering with an MCP client** and **distributing the coordination rules** (next section). Line these two up and multi-agent coordination starts working. For Claude Code and Antigravity, installing the plugin (next section) covers both.
+### Kiro Powers
 
-### Registering with an MCP client
+Register `plugins/kiro` as a Power, reflect the bundled `mcp.json` into Kiro's MCP configuration (no placeholder replacement is needed), and place the hooks into the target's `.kiro/hooks/` with `npx -y lockage setup kiro`. See the [Kiro (Power)](plugins/README.md#kiro-power) section of `plugins/README.md`.
 
-Add a server definition like the following to the MCP configuration of Kiro, and so on; Claude Code and Antigravity need no registration here (see below). Follow each client's configuration file format.
+### Claude Code Plugin
 
-To Kiro's `mcp.json`, add the following definition that launches the npm-published artifact with `npx` (no clone or `npm run build` is needed; the first run may take a little time to fetch).
-
-```json
-{
-  "mcpServers": {
-    "lockage": {
-      "command": "npx",
-      "args": ["-y", "lockage"],
-      "disabled": false
-    }
-  }
-}
-```
-
-The DB (ledger) is stored at `~/.lockage/lockage.sqlite` by default (the parent directory is created automatically). The default is fine; only those who want to change the location add `"env": { "LOCKAGE_DB": "/absolute/path/to/your-workspace/.lockage/lockage.sqlite" }` to `lockage`. With the Claude Code plugin, set `LOCKAGE_DB` in the `env` of a Claude Code settings file (usually `~/.claude/settings.json`) instead (see the Claude Code section of [`plugins/README.md`](plugins/README.md#claude-code)). In Antigravity, set `LOCKAGE_DB` in the shell environment from which Antigravity is launched.
-
-When multiple agents coordinate, line everyone up so they **point at the same `LOCKAGE_DB`**. If you leave the default, everyone points at the same default ledger, so no extra configuration is needed. This becomes the shared coordination ledger.
-
-For Claude Code and Antigravity, you do not need to register it here: the lockage plugin (next section) bundles this `npx -y lockage` definition, so installing the plugin registers the server too. If you registered it by hand before, remove that registration (with a different command, two lockage servers line up; with the same command, only the hand registration is kept and the bundled definition goes unused), after moving any `LOCKAGE_DB` in its `env` to the settings file (for Claude Code, usually `~/.claude/settings.json`) or environment variable (for Antigravity; see [`plugins/README.md`](plugins/README.md)).
-
-Do not write `LOCKAGE_TOOLSETS` in an agent's configuration (only the default `core` is visible). Only when a human uses the maintenance/diagnostic tools, add `"LOCKAGE_TOOLSETS": "maintenance"` to the `env` of that MCP client.
-
-With the Claude Code plugin, the bundled server has no `env`, so register a separate server for maintenance only where a human uses it, and remove it when done:
+Register this repository as a marketplace and install the plugin:
 
 ```bash
-claude mcp add lockage-maint -s local -e LOCKAGE_TOOLSETS=maintenance -- npx -y lockage@latest
-claude mcp remove lockage-maint -s local
+claude plugin marketplace add <path to the lockage repository>
+claude plugin install lockage@lockage
 ```
 
-Give it a command different from the bundled one (here `lockage@latest`, which can be newer than the version the bundled server runs). Claude Code merges servers with the same command even when their names and `env` differ, so registering it with `npx -y lockage` would replace the bundled server, leaving only the maintenance server in that session (confirmed with Claude Code 2.1.285).
+Installing the plugin registers the MCP server too (bundled in `plugins/claude/.mcp.json`), so no separate `claude mcp add` is needed. See the [Claude Code](plugins/README.md#claude-code) section of `plugins/README.md`.
 
-This server exposes the core tools as well as the maintenance ones, as `mcp__lockage-maint__*` (31 tools with lockage 0.9.2, confirmed). While it is registered, lockage-worker sees a second lockage server and returns "failed", so do not launch workers until you remove it. It reads `LOCKAGE_DB` from the environment Claude Code passes to MCP servers, like the bundled server, so it points at the ledger set in the settings `env` (not tried for this server).
+### Antigravity Plugin
+
+Install with agy (the Antigravity CLI):
+
+```bash
+agy plugin install <path to the lockage repository>/plugins/antigravity
+```
+
+Installing the plugin registers the MCP server too (bundled in `plugins/antigravity/mcp_config.json`), so no separate `agy mcp add` is needed. See the [Antigravity](plugins/README.md#antigravity) section of `plugins/README.md`.
+
+### The ledger (shared across all agents)
+
+The DB (ledger) is created at `~/.lockage/lockage.sqlite` by default, so no extra configuration is needed. When multiple agents coordinate, line everyone up so they point at the **same ledger**. If you leave the default, everyone points at the same default ledger. To place it elsewhere, set `LOCKAGE_DB` — where you set it differs per client; see [`docs/mcp-registration.md`](docs/mcp-registration.md).
 
 ---
 
 ## Distributing the coordination rules
 
-Once both registering with an MCP client and distributing these coordination rules are in place, you can get started. After writing the registration in the previous section, go on to deliver the coordination rules to each agent.
-
-**The main path is installation via a plugin / Power.** You can load the coordination rules and hooks on the client side without placing anything in the target repository.
-
-- **Claude Code**: register this repository as a marketplace and install the lockage plugin (`plugins/claude`). The plugin also registers the MCP server.
-- **Antigravity**: install with `agy plugin install <local path where you cloned lockage>/plugins/antigravity`. The plugin also registers the MCP server.
-- **Kiro**: register `plugins/kiro` as a Power and place the hooks into the target's `.kiro/hooks/` (`npx -y lockage setup kiro`).
-
-For the detailed procedure of each, see [`plugins/README.md`](plugins/README.md).
+Registering the server alone is not enough; each agent also needs the coordination rules delivered to it. **The main path is the plugin / Power install from the previous section.** Each plugin bundles the coordination rules and hooks, so installing it loads them on the client side without placing anything in the target repository — the Setup install itself covers this.
 
 **Manual install for environments that cannot use a plugin / Power**: the canonical source of the coordination rules is [`plugins/shared/AGENTS.md`](plugins/shared/AGENTS.md). Copy it to the root of the target project as `AGENTS.md` and you can have the same coordination rules read (keep a single canonical source and do not transcribe the full text here, to avoid double maintenance).
 
