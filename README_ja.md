@@ -83,6 +83,14 @@ Claude Code では、ここで登録する必要はありません。lockage プ
 Antigravity など、まだ npm 公開物での起動を確かめていないクライアントでは、clone して `npm run build` したうえで、`command:node`・`args:["/absolute/path/to/lockage/dist/index.js"]`・`env.LOCKAGE_DB` を指す従来の定義で登録します（Antigravity は `agy mcp add --env LOCKAGE_DB=<台帳の絶対パス> lockage node <lockage のリポジトリのパス>/dist/index.js`）。
 
 エージェントの設定には `LOCKAGE_TOOLSETS` を書きません（既定の `core` だけが見えます）。保守・診断のツールを人間が使うときだけ、その MCP クライアントの `env` に `"LOCKAGE_TOOLSETS": "maintenance"` を足します。
+Claude Code のプラグインでは同梱のサーバが `env` を持たないので、人間が使う場所にだけ保守用のサーバを別に登録し、使い終わったら外します。
+
+```bash
+claude mcp add lockage-maint -s local -e LOCKAGE_TOOLSETS=maintenance -- npx -y lockage@latest
+claude mcp remove lockage-maint -s local
+```
+
+コマンドは同梱のもの（`npx -y lockage`）と変えてください（ここでは `lockage@latest`）。Claude Code は名前や `env` が違ってもコマンドが同じサーバを 1 つにまとめるので、`npx -y lockage` で登録すると同梱のサーバが置き換わり、lockage-worker がツールを見つけられなくなります（Claude Code 2.1.285 で確認）。
 
 ---
 

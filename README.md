@@ -83,6 +83,14 @@ For Claude Code, you do not need to register it here: the lockage plugin (next s
 For clients such as Antigravity where launching from the npm-published artifact has not been confirmed, clone and `npm run build`, then register with the traditional definition that points `command:node`, `args:["/absolute/path/to/lockage/dist/index.js"]`, and `env.LOCKAGE_DB` (for Antigravity, `agy mcp add --env LOCKAGE_DB=<absolute path to the ledger> lockage node <path to the lockage repository>/dist/index.js`).
 
 Do not write `LOCKAGE_TOOLSETS` in an agent's configuration (only the default `core` is visible). Only when a human uses the maintenance/diagnostic tools, add `"LOCKAGE_TOOLSETS": "maintenance"` to the `env` of that MCP client.
+With the Claude Code plugin, the bundled server has no `env`, so register a separate server for maintenance only where a human uses it, and remove it when done:
+
+```bash
+claude mcp add lockage-maint -s local -e LOCKAGE_TOOLSETS=maintenance -- npx -y lockage@latest
+claude mcp remove lockage-maint -s local
+```
+
+Give it a command different from the bundled one (here `lockage@latest`). Claude Code merges servers with the same command even when their names and `env` differ, so registering it with `npx -y lockage` would replace the bundled server, and lockage-worker would no longer find its tools (confirmed with Claude Code 2.1.285).
 
 ---
 
