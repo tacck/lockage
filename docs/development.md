@@ -45,9 +45,12 @@ npm run dev
 - Standard output is JSON-RPC only. Startup logs and errors go to standard error.
 - **When you develop lockage with the lockage plugin installed** (a Claude Code session opened in this repository or one of its worktrees), the plugin's
   `npx -y lockage` (both the MCP server and the hooks) resolves to this working tree's `dist/`, not the npm-published artifact, because the current
-  project's own package is named `lockage`. Run `npm run build` in that tree before starting the session; without `dist/` the server fails to start,
-  and an old build runs old code. Rebuilding (`npm run build`, `prepublishOnly`) during a session briefly removes the files the running server uses,
-  so restart the session after it.
+  project's own package is named `lockage` (confirmed with npm 11.19.0 and Claude Code 2.1.285). Run `npm run build` in that tree before starting
+  the session; without `dist/` the server fails to start, and an old build runs old code.
+  The running server keeps the code it started with, while the hooks load the current `dist/` on every call, so after a rebuild during a session
+  (including the one `npm test` does in `pretest`) the hooks run the new code and the MCP tools the old code. Restart the session only when you want
+  to try a change to the server (the MCP tools) in it. `npm run build` does not delete `dist/`; only `prepublishOnly` (`rm -rf dist`) does, and the
+  hooks fail until it finishes.
 
 For the MCP-client registration procedure (user-facing), see [Registering with an MCP client](../README.md#registering-with-an-mcp-client) in the README.
 
