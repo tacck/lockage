@@ -40,8 +40,12 @@ The canonical source in `shared/` is copied and distributed to each plugin. Wher
 
 For a PR that changes the contents of `plugins/claude/` or `plugins/antigravity/` (including when editing the canonical source in `shared/` changes a copy),
 bump the `version` of `claude/.claude-plugin/plugin.json` and `antigravity/plugin.json` **to the same value**, and bump `package.json` (and `package-lock.json`) to it too.
-The plugins launch the npm package with an unpinned `npx -y lockage`, so keeping one version number for the plugins and the npm package
-lets a reported version identify both. Publish that version to npm when the PR is merged.
+`test/plugins.test.ts` enforces that these three stay equal.
+
+Why keep them equal: the plugins launch the npm package with an **unpinned** `npx -y lockage`, so a plugin change reaches users only once that version is published to npm — bumping the plugin version without publishing the package does nothing. Tying the plugin version to the package version makes "which package version does this plugin expect" a single number, and keeps the two in step across a release. Note this does **not** guarantee the plugin version equals the version actually running: because the launch is unpinned, `npx` runs whatever `lockage` version it has resolved (which may be a cached older version, or — inside the lockage repository — the working tree's `dist/`), not necessarily the one named in `plugin.json`. To see the version a server is actually running, check the `[lockage] ready (version=…)` line it writes to stderr at startup, or the version shown for the server in the client's MCP view (e.g. Claude Code's `/mcp`); the server reports its `package.json` version in the MCP handshake.
+
+For the full release procedure (who publishes, what to check, tagging) and the bump rule by kind of change, see [`../docs/releasing.md`](../docs/releasing.md). Publish the bumped version to npm when the PR is merged.
+
 A change only to `plugins/README.md` or `plugins/kiro/` does not need a bump. Claude Code builds a cache per version, so
 if you forget to bump, `plugin update` may decide there is no update and it will not reach users (what `plugin update` looks at to
 decide whether there is an update is unconfirmed). The test only checks that these versions match; it does not detect a missed bump.
