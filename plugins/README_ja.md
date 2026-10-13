@@ -130,7 +130,9 @@ claude plugin install lockage@lockage
   その登録に `env`（特に `LOCKAGE_DB`）を書いていたなら、外す前に `claude mcp get lockage` で確かめ、設定ファイルの `env` に移しておく。
   移さずに外すと台帳が黙って既定に戻り、このクライアントだけほかのエージェントのタスクが見えなくなる。
   移す先は登録のスコープに合わせる。`-s user` なら `~/.claude/settings.json`、
-  `-s local` / `-s project` ならそのプロジェクトの `.claude/settings.local.json`（チームで共有するなら `.claude/settings.json`）。
+  `-s local` ならそのプロジェクトの `.claude/settings.local.json`、`-s project` ならそのプロジェクトの `.claude/settings.json`
+  （`-s project` の登録はチームで共有する `.mcp.json` にあるので、外すとチーム全員に効く。同じコミットで共有の `.claude/settings.json` に
+  値を移さないと、ほかのメンバーが黙って既定の台帳に戻る）。
   迷ったら `~/.claude/settings.json` にする。全エージェントで 1 つの台帳を共有するので、ユーザー全体で 1 つの値にするのが普通の使い方である。
   Claude Code はコマンドが同じ MCP サーバを 1 つにまとめる。
   手で登録したものが同じコマンド（`npx -y lockage`）なら、名前や `env` が違っても手で登録したほうだけが残る。

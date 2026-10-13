@@ -128,7 +128,9 @@ While private, only people with git-clone authentication can register.
   If that registration had `env` (`LOCKAGE_DB` in particular), first check it with `claude mcp get lockage` and move it to the `env` of a settings file
   before removing; otherwise the ledger silently falls back to the default and this client stops seeing the other agents' tasks.
   Move it to the settings file that matches the registration's scope: `-s user` → `~/.claude/settings.json`;
-  `-s local` / `-s project` → that project's `.claude/settings.local.json` (or `.claude/settings.json` to share it with the team).
+  `-s local` → that project's `.claude/settings.local.json`; `-s project` → that project's `.claude/settings.json`
+  (a `-s project` registration lives in the shared `.mcp.json`, so removing it affects the whole team: move the value to the shared
+  `.claude/settings.json` in the same commit, or the other members silently fall back to the default ledger).
   If you are unsure, use `~/.claude/settings.json`: all agents share one ledger, so a single user-wide value is the usual setup.
   Claude Code merges MCP servers that have the same command:
   if the hand-registered one uses the same command (`npx -y lockage`), only the hand-registered one is kept, even when its name or `env` differs;
