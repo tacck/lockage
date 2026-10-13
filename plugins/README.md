@@ -162,8 +162,9 @@ While private, only people with git-clone authentication can register.
 - You may launch them in parallel (since claim is CAS, two will not take the same task)
 - Response-by-response handling: if blocked, raise the reason to the human. If "could not open a PR," run
   `lockage-publish --repo-path <repo_path> --ticket <ticket_id>` at the caller.
-  If "failed (two lockage MCP servers: ...)" or "failed (no lockage MCP tools)", do not relaunch it; tell the human, and point them to
-  "If you registered the server by hand before" above (keep only `plugin:lockage:lockage` and start a new session).
+  If "failed (two lockage MCP servers: ...)" or "failed (no lockage MCP tools)", do not relaunch it; tell the human what to do:
+  for two servers, keep only `plugin:lockage:lockage` by "If you registered the server by hand before" above (for a maintenance server such as
+  `lockage-maint`, remove it as in the repository-root `README.md`), then start a new session; for no tools, follow the `failed` check under "Verification" above.
 - Once all workers return, do Phase 4 (look at `publisher_status` and sweep / reconcile) in the main session.
 
 ## Antigravity

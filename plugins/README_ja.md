@@ -164,8 +164,9 @@ claude plugin install lockage@lockage
 - 並行で起動してよい（claim は CAS なので、同じタスクを 2 体が取ることはない）
 - 返り値ごとの対応: blocked なら理由を人間に上げる。「PR を作れなかった」なら呼び出し元で
   `lockage-publish --repo-path <repo_path> --ticket <ticket_id>` を実行する。
-  「failed (two lockage MCP servers: ...)」か「failed (no lockage MCP tools)」なら、起動し直さずに人間に伝え、
-  上の「以前に手でサーバを登録していた場合」を案内する（`plugin:lockage:lockage` だけを残して新しいセッションを始める）
+  「failed (two lockage MCP servers: ...)」か「failed (no lockage MCP tools)」なら、起動し直さずに人間に伝え、対処を案内する。
+  サーバが 2 つなら、上の「以前に手でサーバを登録していた場合」で `plugin:lockage:lockage` だけを残し（`lockage-maint` などの保守用サーバなら、
+  リポジトリ直下の `README.md` のとおりに外す）、新しいセッションを始める。ツールが無いなら、上の「動作確認」の `failed` の切り分けを行う
 - すべてのワーカーが返ったら、メインセッションで Phase 4（`publisher_status` を見て sweep / reconcile）を行う
 
 ## Antigravity
