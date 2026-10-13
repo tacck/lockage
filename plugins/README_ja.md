@@ -40,8 +40,12 @@ hook の判定ロジックは `src/hook/` の TypeScript 実装に移植済み�
 
 `plugins/claude/` か `plugins/antigravity/` の中身が変わる PR（`shared/` の正本を直してコピーが変わる場合を含む）では、
 `claude/.claude-plugin/plugin.json` と `antigravity/plugin.json` の `version` を**同じ値に**上げ、`package.json`（と `package-lock.json`）も同じ値にする。
-プラグインは npm パッケージを版を固定しない `npx -y lockage` で起動するので、プラグインと npm パッケージで 1 つの version 番号を使えば、
-報告された version から両方を特定できる。PR をマージしたら、その version を npm に publish する。
+`test/plugins.test.ts` がこの 3 つが揃っていることを強制する。
+
+揃える理由: プラグインは npm パッケージを**版を固定しない** `npx -y lockage` で起動するので、プラグインの変更はその version を npm に publish して初めて利用者に届く —— publish せずにプラグインの version だけ上げても何も起きない。プラグインの version をパッケージの version に結びつけることで、「このプラグインがどのパッケージ version を前提にするか」が 1 つの番号になり、リリースをまたいで両者が歩調を合わせる。ただしこれは、プラグインの version が**実際に動いている版と一致することを保証しない**。起動が版を固定しないため、`npx` は解決した `lockage` の版（キャッシュにある古い版かもしれないし、lockage リポジトリの中なら作業ツリーの `dist/`）を動かすのであって、`plugin.json` に書かれた版とは限らない。動いているサーバの版を確かめるには、起動時に stderr に出る `[lockage] ready (version=…)` の行を見るか、クライアントの MCP 表示（例: Claude Code の `/mcp`）に出るサーバの version を見る。サーバは MCP ハンドシェイクで `package.json` の version を名乗る。
+
+リリースの手順全体（誰が publish するか、何を確かめるか、タグ付け）と変更の種類ごとの version 更新規則は [`../docs/releasing.md`](../docs/releasing_ja.md) を参照。PR をマージしたら、上げた version を npm に publish する。
+
 `plugins/README.md` や `plugins/kiro/` だけの変更では上げなくてよい。Claude Code は version ごとにキャッシュを作るので、
 上げ忘れると `plugin update` が更新なしと判断して利用者に届かないおそれがある（`plugin update` が何を見て
 更新の有無を判断するかは未確認）。テストが確かめるのはこれらの version が揃っていることだけで、上げ忘れは検出しない。

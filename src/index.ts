@@ -21,8 +21,10 @@
  * handoff (§4.7) is implemented as handing a blocked task to another worker (handoff_task).
  * agent_id is self-declared by the client (Phase 1 assumes a single host inside the trust boundary).
  */
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -151,6 +153,27 @@ export function parseToolsets(value: string | undefined): Set<OptionalToolset> {
   return result;
 }
 
+/**
+ * The version this server reports in the MCP initialize handshake.
+ * Read from package.json so it stays in sync with the published package
+ * (previously hard-coded to '0.0.1', which gave clients no way to tell the
+ * running version — see #3). This file sits directly under src/ (dev via tsx)
+ * and under dist/ (built via tsc), so package.json is always one level up.
+ * If it cannot be read, fall back to '0.0.0' rather than failing to start.
+ */
+function readPackageVersion(): string {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown };
+    if (typeof pkg.version === 'string' && pkg.version.length > 0) return pkg.version;
+  } catch {
+    // ignore and fall through to the fallback
+  }
+  return '0.0.0';
+}
+
+const SERVER_VERSION = readPackageVersion();
+
 export function buildServer(
   cdb: CoordDb,
   opts: { toolsets?: Iterable<OptionalToolset> } = {},
@@ -158,7 +181,7 @@ export function buildServer(
   const toolsets = new Set(opts.toolsets ?? []);
   const server = new McpServer({
     name: 'lockage',
-    version: '0.0.1',
+    version: SERVER_VERSION,
   });
 
   // ── 2.1 Task operations ──────────────────────────────────────────
@@ -986,15 +1009,19 @@ async function main(): Promise<void> {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-  // Startup log to stderr only (stdout is reserved for JSON-RPC, so do not write there)
-  process.stderr.write(`[lockage] ready (db=${DB_PATH}, toolsets=${['core', ...toolsets].join(',')})\n`);
+  // Startup log to stderr only (stdout is reserved for JSON-RPC, so do not write there).
+  // Include the version so you can tell the running version from the log (the npx-launched
+  // bundled server resolves whichever version npx has, which need not match a plugin's version — see #3).
+  process.stderr.write(
+    `[lockage] ready (version=${SERVER_VERSION}, db=${DB_PATH}, toolsets=${['core', ...toolsets].join(',')})\n`,
+  );
 }
 
 // Start only when run as the entry point (do not start when imported from tests).
 // Compare realpath-resolved paths: when launched via a bin symlink (npx / a Node version
 // manager's bin), process.argv[1] is the symlink while import.meta.url resolves to the real
 // file, so a raw string compare never matches and the server would silently never start.
-import { fileURLToPath } from 'node:url';
+// (fileURLToPath is imported at the top of the file.)
 import { realpathSync } from 'node:fs';
 const resolveReal = (p: string): string => {
   try {
