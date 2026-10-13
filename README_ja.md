@@ -8,7 +8,7 @@
 
 単一ホスト（個人の PC 1 台）での協調に向けたツールです。
 
-> このドキュメントは lockage を使い始める人向けです。lockage 自体を開発・ビルド・テストする方法は [`docs/development.md`](docs/development_ja.md)、PR 化（`lockage-publish`）の運用の詳細は [`docs/publishing.md`](docs/publishing_ja.md) を参照してください。
+> このドキュメントは lockage を使い始める人向けです。lockage 自体を開発・ビルド・テストする方法は [`docs/development.md`](docs/development_ja.md)、PR 化（`lockage-publish`）の運用の詳細は [`docs/publishing.md`](docs/publishing_ja.md)、npm パッケージのリリースは [`docs/releasing.md`](docs/releasing_ja.md) を参照してください。
 
 ---
 

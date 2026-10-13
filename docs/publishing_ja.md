@@ -2,7 +2,7 @@
 
 > English: [publishing.md](publishing.md)
 
-このドキュメントは、`ticket_ready` を拾って統合ブランチを push し PR 化する別 bin `lockage-publish` の運用詳細をまとめたものです。利用者向けの概要は [`../README.md`](../README_ja.md)、lockage 自体を開発・ビルド・テストする方法は [`./development.md`](./development_ja.md) を参照してください。
+このドキュメントは、`ticket_ready` を拾って統合ブランチを push し PR 化する別 bin `lockage-publish` の運用詳細をまとめたものです。これは npm パッケージのリリース（`npm publish`、version を上げる規則）とは**別**です。そちらは [`./releasing.md`](./releasing_ja.md) を参照してください。両者は「publish」という語が共通なだけの無関係な操作です。利用者向けの概要は [`../README.md`](../README_ja.md)、lockage 自体を開発・ビルド・テストする方法は [`./development.md`](./development_ja.md) を参照してください。
 
 ## 概要
 
