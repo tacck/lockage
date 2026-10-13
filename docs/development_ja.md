@@ -43,6 +43,11 @@ npm run dev
 - DB の保存先は環境変数 `LOCKAGE_DB` で指定できます（既定 `~/.lockage/lockage.sqlite`）。横断台帳はグローバルに 1 つという前提のホーム絶対パスです。親ディレクトリは自動作成されます。
 - 公開するツールの組は環境変数 `LOCKAGE_TOOLSETS` で選べます（既定はエージェント向けの `core` だけ。README の「提供ツール」を参照）。知らない組の名前を書くと起動に失敗します。
 - 標準出力は JSON-RPC 専用です。起動ログやエラーは標準エラー出力に出ます。
+- **lockage プラグインを入れたまま lockage 自身を開発するとき**（このリポジトリかその worktree で Claude Code のセッションを開いたとき）は、
+  プラグインの `npx -y lockage`（MCP サーバとフックの両方）が、npm 公開物ではなくこの作業ツリーの `dist/` に解決されます。
+  カレントのプロジェクト自身のパッケージ名が `lockage` だからです。セッションを始める前に、その作業ツリーで `npm run build` を済ませてください。
+  `dist/` が無いとサーバは起動せず、古いビルドなら古いコードが動きます。セッション中にビルドし直す（`npm run build`、`prepublishOnly`）と、
+  動いているサーバが使うファイルが一時的に消えるので、ビルドし直したらセッションを始め直してください。
 
 MCP クライアントへの登録手順（利用者向け）は README の [MCP クライアントへの登録](../README_ja.md#mcp-クライアントへの登録) を参照してください。
 
@@ -91,7 +96,7 @@ lockage/
 │       └── publish-cli.ts lockage-publish エントリ
 ├── plugins/              各クライアントのプラグイン（それぞれが単体で完結したプラグインのルート）
 │   ├── shared/            正本（AGENTS.md・lockage-workflow スキル・フックの共通判定）。npm run sync:plugins で各プラグインへコピーする
-│   ├── claude/            Claude Code プラグイン（フック・lockage-worker エージェント）
+│   ├── claude/            Claude Code プラグイン（MCP サーバ定義の .mcp.json・フック・lockage-worker エージェント）
 │   ├── antigravity/       Antigravity プラグイン（フック）
 │   └── kiro/              Kiro Power（POWER.md・steering・mcp.json の雛形・hook の雛形）
 ├── scripts/sync-plugins.ts  plugins/shared/ の正本を各プラグインへコピーする（--check でずれを検出）
