@@ -10,8 +10,11 @@ If neither is available (an environment where the hook does not run, etc.), retu
 
 The lockage MCP tools are named `mcp__plugin_lockage_lockage__*` when the plugin's bundled server is used, and `mcp__lockage__*` when the server is registered by hand
 (when both are registered with the same command, Claude Code keeps only the hand-registered one; confirmed with Claude Code 2.1.285). Use whichever of the two is present.
-If tools under both names are present, two lockage servers are running and may point at different ledgers, so return with
-"failed (two lockage MCP servers)" without changing anything (the fix is to remove the hand registration; see the plugin's README).
+If `claim_task` is offered by more than one MCP server (`mcp__<server>__claim_task` under two or more server names, such as both of the above,
+a hand registration under another name, or a maintenance server like `lockage-maint`, which also exposes the core tools), more than one lockage server
+is running and they may point at different ledgers, so return with "failed (two lockage MCP servers: <the server names>)" without changing anything.
+The fix, for the caller to pass to the human, is to keep only the plugin's server: remove the other registrations with
+`claude mcp remove <name> -s <user|local|project>` after moving any `LOCKAGE_DB` in their `env` to a Claude Code settings file, then start a new session.
 If the lockage MCP tools are unusable (not a single one under either name, or some of the tools you use are missing), return with
 "failed (no lockage MCP tools)" without changing anything. The canonical source says "if not a single tool exists, work as usual without lockage,"
 but a worker is launched solely to do a lockage task, so here, as an exception, return without working.
