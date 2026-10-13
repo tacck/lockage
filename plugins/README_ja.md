@@ -158,7 +158,9 @@ claude plugin install lockage@lockage
   人間の判断を `instructions` で渡す。調整役がいれば `coordinator`。フックが動かない環境では `agents_md_path`
 - 並行で起動してよい（claim は CAS なので、同じタスクを 2 体が取ることはない）
 - 返り値ごとの対応: blocked なら理由を人間に上げる。「PR を作れなかった」なら呼び出し元で
-  `lockage-publish --repo-path <repo_path> --ticket <ticket_id>` を実行する
+  `lockage-publish --repo-path <repo_path> --ticket <ticket_id>` を実行する。
+  「failed (two lockage MCP servers: ...)」か「failed (no lockage MCP tools)」なら、起動し直さずに人間に伝え、
+  上の「以前に手でサーバを登録していた場合」を案内する（`plugin:lockage:lockage` だけを残して新しいセッションを始める）
 - すべてのワーカーが返ったら、メインセッションで Phase 4（`publisher_status` を見て sweep / reconcile）を行う
 
 ## Antigravity
