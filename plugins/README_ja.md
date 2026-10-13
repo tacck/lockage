@@ -119,13 +119,16 @@ claude plugin install lockage@lockage
 - プラグインは lockage MCP サーバの定義を `plugins/claude/.mcp.json` に同梱しており、npm 公開物を `npx -y lockage` で起動する
   （フックと同じ）。プラグインを入れればサーバも登録されるので、別途 `claude mcp add` する必要はない。
   `/mcp` には `plugin:lockage:lockage` として出て、ツール名は `mcp__plugin_lockage_lockage__*` になる（手で登録したサーバでは `mcp__lockage__*`）。
-  いずれも 2026-10 に Claude Code 2.1.285 の実機で確認した。
 - **以前に手でサーバを登録していた場合**（`claude mcp add lockage ...`）は、`claude mcp remove lockage -s user` で外す
-  （プロジェクトごとに登録していたなら、そこで `-s local` / `-s project`）。手で登録したものが同じコマンド（`npx -y lockage`）なら
-  Claude Code は手で登録したほうだけを残すが、コマンドが違う（`node <clone>/dist/index.js` など）と両方が登録され、lockage サーバが 2 つ並ぶ。
+  （プロジェクトごとに登録していたなら、そこで `-s local` / `-s project`）。Claude Code はコマンドが同じ MCP サーバを 1 つにまとめる。
+  手で登録したものが同じコマンド（`npx -y lockage`）なら、名前や `env` が違っても手で登録したほうだけが残る。
+  コマンドが違う（`node <clone>/dist/index.js` など）と両方が登録され、lockage サーバが 2 つ並ぶ。
 - 同梱の定義は `env` を持たないので、台帳は既定の `~/.lockage/lockage.sqlite` になる。別の場所に置くときは、
   Claude Code の `settings.json` の `env`（または Claude Code を起動するシェルの環境変数）に `LOCKAGE_DB` を設定する。サーバはそれを引き継ぐ。
   全エージェントで同じ台帳を指すこと。
+- 実機で確認したこと（Claude Code 2.1.285、2026-10-13、`--plugin-dir` でプラグインを読み込んで確認）: 上のサーバ名とツール名。
+  コマンドが同じサーバが上のとおり 1 つにまとめられ、手で登録したほうが残ること。シェルの環境変数か、設定の `env`（`--settings` で指定）に
+  置いた `LOCKAGE_DB` が同梱のサーバに届くこと（そのパスに DB ファイルが作られた）。
   `lockage-publish` は MCP サーバの環境を受け取らないので、台帳を既定以外に置いたときは、
   `--db` か シェルの環境変数 `LOCKAGE_DB` で同じ台帳を見せる（見せないと、PR 化待ちのチケットがあっても `published: []` になる）。
 - 以前の手順で `~/.claude/skills/lockage-workflow/` に置いたスキルは、プラグインのスキルと重複するので削除する。

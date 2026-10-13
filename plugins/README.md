@@ -117,13 +117,16 @@ While private, only people with git-clone authentication can register.
 - The plugin bundles the lockage MCP server definition in `plugins/claude/.mcp.json`, which launches the npm-published artifact with `npx -y lockage`
   (the same as the hooks). Installing the plugin registers the server, so no separate `claude mcp add` is needed.
   In `/mcp` it shows as `plugin:lockage:lockage`, and its tools are named `mcp__plugin_lockage_lockage__*` (a hand-registered server's are `mcp__lockage__*`).
-  These were confirmed on a real machine with Claude Code 2.1.285 in 2026-10.
 - **If you registered the server by hand before** (`claude mcp add lockage ...`), remove it with `claude mcp remove lockage -s user`
-  (and `-s local` / `-s project` where you registered it per project). If the hand-registered one uses the same command (`npx -y lockage`),
-  Claude Code keeps only the hand-registered one; if the command differs (such as `node <clone>/dist/index.js`), both are registered and two lockage servers line up.
+  (and `-s local` / `-s project` where you registered it per project). Claude Code merges MCP servers that have the same command:
+  if the hand-registered one uses the same command (`npx -y lockage`), only the hand-registered one is kept, even when its name or `env` differs;
+  if the command differs (such as `node <clone>/dist/index.js`), both are registered and two lockage servers line up.
 - The bundled definition does not set `env`, so the ledger is the default `~/.lockage/lockage.sqlite`. To place it elsewhere,
   set `LOCKAGE_DB` in the `env` of Claude Code's `settings.json` (or in the shell environment that launches Claude Code); the server inherits it.
   All agents must point at the same ledger.
+- What was confirmed on a real machine (Claude Code 2.1.285, 2026-10-13, loading the plugin with `--plugin-dir`): the server name and tool names above;
+  that servers with the same command are merged as described, keeping the hand-registered one; and that `LOCKAGE_DB` set in the shell environment
+  or in the settings `env` (given with `--settings`) reaches the bundled server (the DB file was created at that path).
   `lockage-publish` does not receive the MCP server's environment, so when you place the ledger somewhere other than the default,
   show it the same ledger with `--db` or the shell environment variable `LOCKAGE_DB` (without showing it, even if a ticket is awaiting a PR you get `published: []`).
 - Delete the skill that an earlier procedure placed in `~/.claude/skills/lockage-workflow/`, since it duplicates the plugin's skill.
