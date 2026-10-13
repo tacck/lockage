@@ -39,10 +39,12 @@ hook の判定ロジックは `src/hook/` の TypeScript 実装に移植済み�
 ### version
 
 `plugins/claude/` か `plugins/antigravity/` の中身が変わる PR（`shared/` の正本を直してコピーが変わる場合を含む）では、
-`claude/.claude-plugin/plugin.json` と `antigravity/plugin.json` の `version` を**同じ値に**上げる。
+`claude/.claude-plugin/plugin.json` と `antigravity/plugin.json` の `version` を**同じ値に**上げ、`package.json`（と `package-lock.json`）も同じ値にする。
+プラグインは npm パッケージを版を固定しない `npx -y lockage` で起動するので、プラグインと npm パッケージで 1 つの version 番号を使えば、
+報告された version から両方を特定できる。PR をマージしたら、その version を npm に publish する。
 `plugins/README.md` や `plugins/kiro/` だけの変更では上げなくてよい。Claude Code は version ごとにキャッシュを作るので、
 上げ忘れると `plugin update` が更新なしと判断して利用者に届かないおそれがある（`plugin update` が何を見て
-更新の有無を判断するかは未確認）。テストが確かめるのは 2 つの version が揃っていることだけで、上げ忘れは検出しない。
+更新の有無を判断するかは未確認）。テストが確かめるのは 3 つの version が揃っていることだけで、上げ忘れは検出しない。
 Kiro の `POWER.md` 形式には version が無い（以前置いていた `.claude-plugin/plugin.json` は Kiro に読まれていなかったので消した）。
 
 ### テスト

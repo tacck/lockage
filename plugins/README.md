@@ -39,10 +39,12 @@ The canonical source in `shared/` is copied and distributed to each plugin. Wher
 ### version
 
 For a PR that changes the contents of `plugins/claude/` or `plugins/antigravity/` (including when editing the canonical source in `shared/` changes a copy),
-bump the `version` of `claude/.claude-plugin/plugin.json` and `antigravity/plugin.json` **to the same value**.
+bump the `version` of `claude/.claude-plugin/plugin.json` and `antigravity/plugin.json` **to the same value**, and bump `package.json` (and `package-lock.json`) to it too.
+The plugins launch the npm package with an unpinned `npx -y lockage`, so keeping one version number for the plugins and the npm package
+lets a reported version identify both. Publish that version to npm when the PR is merged.
 A change only to `plugins/README.md` or `plugins/kiro/` does not need a bump. Claude Code builds a cache per version, so
 if you forget to bump, `plugin update` may decide there is no update and it will not reach users (what `plugin update` looks at to
-decide whether there is an update is unconfirmed). The test only checks that the two versions match; it does not detect a missed bump.
+decide whether there is an update is unconfirmed). The test only checks that the three versions match; it does not detect a missed bump.
 Kiro's `POWER.md` format has no version (the `.claude-plugin/plugin.json` that used to be placed was not read by Kiro, so it was removed).
 
 ### Testing

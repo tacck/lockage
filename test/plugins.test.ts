@@ -79,10 +79,11 @@ test('plugins: the Claude Code plugin bundles the lockage MCP server, launched f
   );
 });
 
-test('plugins: align the version of the Claude Code and Antigravity plugins', () => {
+test('plugins: align the version of the Claude Code and Antigravity plugins with the npm package', () => {
+  // The plugins launch the npm package with an unpinned npx, so a version that names different contents
+  // in the plugin and on npm makes a user's report ambiguous.
   const version = (path: string): string => JSON.parse(read(path)).version;
-  assert.equal(
-    version('plugins/antigravity/plugin.json'),
-    version('plugins/claude/.claude-plugin/plugin.json'),
-  );
+  const plugin = version('plugins/claude/.claude-plugin/plugin.json');
+  assert.equal(version('plugins/antigravity/plugin.json'), plugin);
+  assert.equal(version('package.json'), plugin, 'bump package.json together with the plugins');
 });
