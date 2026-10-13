@@ -135,8 +135,10 @@ claude plugin install lockage@lockage
 - 実機で確認したこと（Claude Code 2.1.285、2026-10-13、`--plugin-dir` でプラグインを読み込んで確認）: 上のサーバ名とツール名。
   コマンドが同じサーバが上のとおり 1 つにまとめられ、手で登録したほうが残ること。シェルの環境変数か、設定の `env`（`--settings` で指定）に
   置いた `LOCKAGE_DB` が同梱のサーバに届くこと（そのパスに DB ファイルが作られた）。
-  `lockage-publish` は MCP サーバの環境を受け取らないので、台帳を既定以外に置いたときは、
-  `--db` か シェルの環境変数 `LOCKAGE_DB` で同じ台帳を見せる（見せないと、PR 化待ちのチケットがあっても `published: []` になる）。
+  `lockage-publish` は別のコマンドで、`LOCKAGE_DB` を MCP サーバからではなく、実行した環境から読む。
+  台帳を既定以外に置いたときは、実行する場所で `--db` を付ける（またはシェルの環境変数 `LOCKAGE_DB` を設定する）。
+  特に Claude Code の外の端末には `settings.json` の `env` が無い
+  （同じ台帳を見せないと、PR 化待ちのチケットがあっても `published: []` になる）。
 - 以前の手順で `~/.claude/skills/lockage-workflow/` に置いたスキルは、プラグインのスキルと重複するので削除する。
 - 動作確認: 新しいセッションの最初に「lockage 協調開発（lockage プラグイン）」の文脈が注入されること、
   `/mcp` に `plugin:lockage:lockage` が接続済みで出ることを確かめる。注入が出なければ `npx` が lockage を解決できているか、git リポジトリの外で起動していないかを確かめる。

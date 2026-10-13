@@ -133,8 +133,10 @@ While private, only people with git-clone authentication can register.
 - What was confirmed on a real machine (Claude Code 2.1.285, 2026-10-13, loading the plugin with `--plugin-dir`): the server name and tool names above;
   that servers with the same command are merged as described, keeping the hand-registered one; and that `LOCKAGE_DB` set in the shell environment
   or in the settings `env` (given with `--settings`) reaches the bundled server (the DB file was created at that path).
-  `lockage-publish` does not receive the MCP server's environment, so when you place the ledger somewhere other than the default,
-  show it the same ledger with `--db` or the shell environment variable `LOCKAGE_DB` (without showing it, even if a ticket is awaiting a PR you get `published: []`).
+  `lockage-publish` is a separate command and reads `LOCKAGE_DB` from the environment it is run in, not from the MCP server.
+  When you place the ledger somewhere other than the default, pass `--db` (or set the shell environment variable `LOCKAGE_DB`) wherever you run it;
+  in particular, a terminal outside Claude Code does not have the `env` of `settings.json`
+  (without showing it the same ledger, even if a ticket is awaiting a PR you get `published: []`).
 - Delete the skill that an earlier procedure placed in `~/.claude/skills/lockage-workflow/`, since it duplicates the plugin's skill.
 - Verification: at the start of a new session, confirm that the context "lockage coordinated development (lockage plugin)" is injected and that
   `plugin:lockage:lockage` shows as connected in `/mcp`. If the injection does not appear, confirm whether `npx` can resolve lockage and whether you launched outside a git repository.
