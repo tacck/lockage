@@ -9,7 +9,9 @@ The canonical source's location is shown by the hook (SubagentStart) at startup,
 If neither is available (an environment where the hook does not run, etc.), return with "failed (location of AGENTS.md unknown)" without changing anything.
 
 The lockage MCP tools are named `mcp__plugin_lockage_lockage__*` when the plugin's bundled server is used, and `mcp__lockage__*` when the server is registered by hand
-(when both are registered with the same command, Claude Code keeps only the hand-registered one). Either name is fine; use whichever is present.
+(when both are registered with the same command, Claude Code keeps only the hand-registered one). Use whichever of the two is present.
+If tools under both names are present, two lockage servers are running and may point at different ledgers, so return with
+"failed (two lockage MCP servers)" without changing anything (the fix is to remove the hand registration; see the plugin's README).
 If the lockage MCP tools are unusable (not a single one under either name, or some of the tools you use are missing), return with
 "failed (no lockage MCP tools)" without changing anything. The canonical source says "if not a single tool exists, work as usual without lockage,"
 but a worker is launched solely to do a lockage task, so here, as an exception, return without working.
