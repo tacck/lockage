@@ -58,7 +58,7 @@ To get started you need just two things: **registering with an MCP client** and 
 
 ### Registering with an MCP client
 
-Add a server definition like the following to the MCP configuration of Kiro / Antigravity, and so on (Claude Code needs no registration here; see below) (follow each client's configuration file format. Antigravity uses `~/.gemini/config/mcp_config.json`, and you can also register with `agy mcp add`).
+Add a server definition like the following to the MCP configuration of Kiro / Antigravity, and so on; Claude Code needs no registration here (see below). Follow each client's configuration file format (Antigravity uses `~/.gemini/config/mcp_config.json`, and you can also register with `agy mcp add`).
 
 To Kiro's `mcp.json`, add the following definition that launches the npm-published artifact with `npx` (no clone or `npm run build` is needed; the first run may take a little time to fetch).
 
@@ -83,6 +83,7 @@ For Claude Code, you do not need to register it here: the lockage plugin (next s
 For clients such as Antigravity where launching from the npm-published artifact has not been confirmed, clone and `npm run build`, then register with the traditional definition that points `command:node`, `args:["/absolute/path/to/lockage/dist/index.js"]`, and `env.LOCKAGE_DB` (for Antigravity, `agy mcp add --env LOCKAGE_DB=<absolute path to the ledger> lockage node <path to the lockage repository>/dist/index.js`).
 
 Do not write `LOCKAGE_TOOLSETS` in an agent's configuration (only the default `core` is visible). Only when a human uses the maintenance/diagnostic tools, add `"LOCKAGE_TOOLSETS": "maintenance"` to the `env` of that MCP client.
+
 With the Claude Code plugin, the bundled server has no `env`, so register a separate server for maintenance only where a human uses it, and remove it when done:
 
 ```bash
