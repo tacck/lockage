@@ -72,6 +72,11 @@ test('plugins: the Claude Code plugin bundles the lockage MCP server, launched f
   const { mcpServers } = JSON.parse(read('plugins/claude/.mcp.json'));
   assert.deepEqual(Object.keys(mcpServers), ['lockage']);
   assert.deepEqual(mcpServers.lockage, { command: 'npx', args: ['-y', 'lockage'] });
+  assert.equal(
+    'mcpServers' in JSON.parse(read('plugins/claude/.claude-plugin/plugin.json')),
+    false,
+    'define the MCP server only in .mcp.json, not also in plugin.json',
+  );
 });
 
 test('plugins: align the version of the Claude Code and Antigravity plugins', () => {
