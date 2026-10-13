@@ -86,4 +86,7 @@ test('plugins: align the version of the Claude Code and Antigravity plugins with
   const plugin = version('plugins/claude/.claude-plugin/plugin.json');
   assert.equal(version('plugins/antigravity/plugin.json'), plugin);
   assert.equal(version('package.json'), plugin, 'bump package.json together with the plugins');
+  const lock = JSON.parse(read('package-lock.json'));
+  assert.equal(lock.version, plugin, 'update package-lock.json too (npm install)');
+  assert.equal(lock.packages[''].version, plugin, 'update package-lock.json too (npm install)');
 });

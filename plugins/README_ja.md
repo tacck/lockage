@@ -44,7 +44,7 @@ hook の判定ロジックは `src/hook/` の TypeScript 実装に移植済み�
 報告された version から両方を特定できる。PR をマージしたら、その version を npm に publish する。
 `plugins/README.md` や `plugins/kiro/` だけの変更では上げなくてよい。Claude Code は version ごとにキャッシュを作るので、
 上げ忘れると `plugin update` が更新なしと判断して利用者に届かないおそれがある（`plugin update` が何を見て
-更新の有無を判断するかは未確認）。テストが確かめるのは 3 つの version が揃っていることだけで、上げ忘れは検出しない。
+更新の有無を判断するかは未確認）。テストが確かめるのはこれらの version が揃っていることだけで、上げ忘れは検出しない。
 Kiro の `POWER.md` 形式には version が無い（以前置いていた `.claude-plugin/plugin.json` は Kiro に読まれていなかったので消した）。
 
 ### テスト
