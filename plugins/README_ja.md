@@ -5,14 +5,15 @@
 lockage の協調ルール（`AGENTS.md`）と lockage-workflow スキルを、各 AI クライアントのプラグインとして配る。
 Claude Code・Antigravity はプラグインで入れると、導入先リポジトリには何も置かずに lockage を使える。
 Kiro は Power の登録に加えて、導入先の `.kiro/hooks/` への hook の雛形の配置が要る（下の「Kiro（Power）」）。
-どのクライアントでも、lockage MCP サーバの登録は別に要る。
+Claude Code のプラグインは lockage MCP サーバの定義（`.mcp.json`）も同梱しているので、プラグインを入れればサーバも登録される。
+ほかのクライアントでは、lockage MCP サーバの登録が別に要る。
 
 ## 構成
 
 | ディレクトリ | 役割 |
 |---|---|
 | `shared/` | **正本。** `AGENTS.md`・`skills/lockage-workflow/SKILL.md`。どのクライアントからも直接は読ませない。フックの判定ロジックは `src/hook/` の TypeScript 実装に移植済みで、各クライアントは `npx -y lockage hook ...` で起動する。 |
-| `claude/` | **Claude Code プラグインのルート。** `.claude-plugin/plugin.json`・`hooks/hooks.json`・`agents/lockage-worker.md`。マーケットプレイスはリポジトリ直下の `.claude-plugin/marketplace.json`。 |
+| `claude/` | **Claude Code プラグインのルート。** `.claude-plugin/plugin.json`・`.mcp.json`（MCP サーバの定義）・`hooks/hooks.json`・`agents/lockage-worker.md`。マーケットプレイスはリポジトリ直下の `.claude-plugin/marketplace.json`。 |
 | `antigravity/` | **Antigravity プラグインのルート。** `plugin.json`・`hooks.json`。 |
 | `kiro/` | **Kiro Power のルート**（`POWER.md` 形式）。`POWER.md`・`mcp.json` の雛形・`steering/`（`AGENTS.md` と lockage-workflow スキルのコピーを含む）・`hooks/`（`.kiro/hooks/` へ置く雛形）。 |
 
@@ -115,14 +116,21 @@ claude plugin install lockage@lockage
 - `claude -p` などの非対話実行では、確認に答える人がいないため編集は拒否として扱われうる。
   拒否された編集は記録されないので、その場合は本流ツリーの編集が毎回止まる
   （非対話実行で確認がどう扱われるかは Claude Code の権限設定に依存するので、ヘッドレスのワーカーで使う前に確かめること）。
-- lockage MCP サーバ自体の登録はプラグインに含めない（サーバのパスが環境ごとに違うため）。
-  リポジトリ直下の `README.md` の「MCP クライアントへの登録」の手順で、別途登録する（全エージェントで同じ台帳を指すこと）。
-  登録しないと、AGENTS.md の「ツールが 1 つも見つからない場合」として lockage を使わずに作業する。
-  `lockage-publish` は MCP サーバの登録の `env.LOCKAGE_DB` を受け取らないので、台帳を既定（`~/.lockage/lockage.sqlite`）以外に
-  置いたときは、`--db` か シェルの環境変数 `LOCKAGE_DB` で同じ台帳を見せる（見せないと、PR 化待ちのチケットがあっても `published: []` になる）。
+- プラグインは lockage MCP サーバの定義を `plugins/claude/.mcp.json` に同梱しており、npm 公開物を `npx -y lockage` で起動する
+  （フックと同じ）。プラグインを入れればサーバも登録されるので、別途 `claude mcp add` する必要はない。
+  `/mcp` には `plugin:lockage:lockage` として出て、ツール名は `mcp__plugin_lockage_lockage__*` になる（手で登録したサーバでは `mcp__lockage__*`）。
+  いずれも 2026-10 に Claude Code 2.1.285 の実機で確認した。
+- **以前に手でサーバを登録していた場合**（`claude mcp add lockage ...`）は、`claude mcp remove lockage -s user` で外す
+  （プロジェクトごとに登録していたなら、そこで `-s local` / `-s project`）。手で登録したものが同じコマンド（`npx -y lockage`）なら
+  Claude Code は手で登録したほうだけを残すが、コマンドが違う（`node <clone>/dist/index.js` など）と両方が登録され、lockage サーバが 2 つ並ぶ。
+- 同梱の定義は `env` を持たないので、台帳は既定の `~/.lockage/lockage.sqlite` になる。別の場所に置くときは、
+  Claude Code の `settings.json` の `env`（または Claude Code を起動するシェルの環境変数）に `LOCKAGE_DB` を設定する。サーバはそれを引き継ぐ。
+  全エージェントで同じ台帳を指すこと。
+  `lockage-publish` は MCP サーバの環境を受け取らないので、台帳を既定以外に置いたときは、
+  `--db` か シェルの環境変数 `LOCKAGE_DB` で同じ台帳を見せる（見せないと、PR 化待ちのチケットがあっても `published: []` になる）。
 - 以前の手順で `~/.claude/skills/lockage-workflow/` に置いたスキルは、プラグインのスキルと重複するので削除する。
 - 動作確認: 新しいセッションの最初に「lockage 協調開発（lockage プラグイン）」の文脈が注入されること、
-  `/mcp` に lockage が出ることを確かめる。注入が出なければ `npx` が lockage を解決できているか、git リポジトリの外で起動していないかを確かめる。
+  `/mcp` に `plugin:lockage:lockage` が接続済みで出ることを確かめる。注入が出なければ `npx` が lockage を解決できているか、git リポジトリの外で起動していないかを確かめる。
 
 **lockage-worker（サブエージェント）の使い方**: メインセッションが Agent ツールで起動する。
 - 渡すもの: `repo_path`、`task_id` か `ticket_id`。中断したタスクを再開させるときは前回の `agent_id` と、

@@ -5,14 +5,15 @@
 Distribute lockage's coordination rules (`AGENTS.md`) and the lockage-workflow skill as plugins for each AI client.
 With a plugin install, Claude Code and Antigravity can use lockage without placing anything in the target repository.
 Kiro, in addition to registering the Power, needs the hook templates placed into the target's `.kiro/hooks/` (see "Kiro (Power)" below).
-For any client, registering the lockage MCP server is needed separately.
+The Claude Code plugin also bundles the lockage MCP server definition (`.mcp.json`), so installing the plugin registers the server too.
+For the other clients, registering the lockage MCP server is needed separately.
 
 ## Structure
 
 | Directory | Role |
 |---|---|
 | `shared/` | **Canonical source.** `AGENTS.md`, `skills/lockage-workflow/SKILL.md`. Not read directly from any client. The hook decision logic has been ported to the TypeScript implementation in `src/hook/`, and each client launches it via `npx -y lockage hook ...`. |
-| `claude/` | **Root of the Claude Code plugin.** `.claude-plugin/plugin.json`, `hooks/hooks.json`, `agents/lockage-worker.md`. The marketplace is `.claude-plugin/marketplace.json` at the repository root. |
+| `claude/` | **Root of the Claude Code plugin.** `.claude-plugin/plugin.json`, `.mcp.json` (the MCP server definition), `hooks/hooks.json`, `agents/lockage-worker.md`. The marketplace is `.claude-plugin/marketplace.json` at the repository root. |
 | `antigravity/` | **Root of the Antigravity plugin.** `plugin.json`, `hooks.json`. |
 | `kiro/` | **Root of the Kiro Power** (`POWER.md` format). `POWER.md`, the `mcp.json` template, `steering/` (includes copies of `AGENTS.md` and the lockage-workflow skill), `hooks/` (templates to place into `.kiro/hooks/`). |
 
@@ -113,14 +114,21 @@ While private, only people with git-clone authentication can register.
 - In non-interactive runs such as `claude -p`, since there is no one to answer the confirmation, the edit may be treated as rejected.
   A rejected edit is not recorded, so in that case the main-tree edit is stopped every time
   (how a confirmation is handled in a non-interactive run depends on Claude Code's permission settings, so confirm before using it in a headless worker).
-- Registering the lockage MCP server itself is not included in the plugin (the server path differs per environment).
-  Register it separately via the procedure in "Registering with an MCP client" in the repository-root `README.md` (all agents point at the same ledger).
-  Without registration, per AGENTS.md's "when no tools are found at all" you work without lockage.
-  `lockage-publish` does not receive `env.LOCKAGE_DB` from the MCP server registration, so when you place the ledger somewhere other than the default (`~/.lockage/lockage.sqlite`),
+- The plugin bundles the lockage MCP server definition in `plugins/claude/.mcp.json`, which launches the npm-published artifact with `npx -y lockage`
+  (the same as the hooks). Installing the plugin registers the server, so no separate `claude mcp add` is needed.
+  In `/mcp` it shows as `plugin:lockage:lockage`, and its tools are named `mcp__plugin_lockage_lockage__*` (a hand-registered server's are `mcp__lockage__*`).
+  These were confirmed on a real machine with Claude Code 2.1.285 in 2026-10.
+- **If you registered the server by hand before** (`claude mcp add lockage ...`), remove it with `claude mcp remove lockage -s user`
+  (and `-s local` / `-s project` where you registered it per project). If the hand-registered one uses the same command (`npx -y lockage`),
+  Claude Code keeps only the hand-registered one; if the command differs (such as `node <clone>/dist/index.js`), both are registered and two lockage servers line up.
+- The bundled definition does not set `env`, so the ledger is the default `~/.lockage/lockage.sqlite`. To place it elsewhere,
+  set `LOCKAGE_DB` in the `env` of Claude Code's `settings.json` (or in the shell environment that launches Claude Code); the server inherits it.
+  All agents must point at the same ledger.
+  `lockage-publish` does not receive the MCP server's environment, so when you place the ledger somewhere other than the default,
   show it the same ledger with `--db` or the shell environment variable `LOCKAGE_DB` (without showing it, even if a ticket is awaiting a PR you get `published: []`).
 - Delete the skill that an earlier procedure placed in `~/.claude/skills/lockage-workflow/`, since it duplicates the plugin's skill.
 - Verification: at the start of a new session, confirm that the context "lockage coordinated development (lockage plugin)" is injected and that
-  lockage shows in `/mcp`. If the injection does not appear, confirm whether `npx` can resolve lockage and whether you launched outside a git repository.
+  `plugin:lockage:lockage` shows as connected in `/mcp`. If the injection does not appear, confirm whether `npx` can resolve lockage and whether you launched outside a git repository.
 
 **How to use lockage-worker (subagent)**: the main session launches it with the Agent tool.
 - What to pass: `repo_path`, and `task_id` or `ticket_id`. To resume an interrupted task, pass the previous `agent_id` and

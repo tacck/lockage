@@ -66,6 +66,14 @@ test('sync-plugins: a distributed manifest checked out with CRLF is also conside
   assert.deepEqual(leftovers(base), []);
 });
 
+test('plugins: the Claude Code plugin bundles the lockage MCP server, launched from the npm-published artifact', () => {
+  // The plugin is copied into the cache at install, so it cannot point at a local build (dist/) by absolute path.
+  // env is left out so the server inherits LOCKAGE_DB from Claude Code's environment and all agents share the same ledger.
+  const { mcpServers } = JSON.parse(read('plugins/claude/.mcp.json'));
+  assert.deepEqual(Object.keys(mcpServers), ['lockage']);
+  assert.deepEqual(mcpServers.lockage, { command: 'npx', args: ['-y', 'lockage'] });
+});
+
 test('plugins: align the version of the Claude Code and Antigravity plugins', () => {
   const version = (path: string): string => JSON.parse(read(path)).version;
   assert.equal(

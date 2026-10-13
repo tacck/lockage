@@ -78,7 +78,9 @@ The DB (ledger) is stored at `~/.lockage/lockage.sqlite` by default (the parent 
 
 When multiple agents coordinate, line everyone up so they **point at the same `LOCKAGE_DB`**. If you leave the default, everyone points at the same default ledger, so no extra configuration is needed. This becomes the shared coordination ledger.
 
-For clients such as Claude Code / Antigravity where launching from the npm-published artifact has not been confirmed, clone and `npm run build`, then register with the traditional definition that points `command:node`, `args:["/absolute/path/to/lockage/dist/index.js"]`, and `env.LOCKAGE_DB` (for Antigravity, `agy mcp add --env LOCKAGE_DB=<absolute path to the ledger> lockage node <path to the lockage repository>/dist/index.js`).
+For Claude Code, you do not need to register it here: the lockage plugin (next section) bundles this `npx -y lockage` definition, so installing the plugin registers the server too. If you registered it by hand before, remove it with `claude mcp remove lockage -s user` to avoid two servers (see [`plugins/README.md`](plugins/README.md#claude-code)).
+
+For clients such as Antigravity where launching from the npm-published artifact has not been confirmed, clone and `npm run build`, then register with the traditional definition that points `command:node`, `args:["/absolute/path/to/lockage/dist/index.js"]`, and `env.LOCKAGE_DB` (for Antigravity, `agy mcp add --env LOCKAGE_DB=<absolute path to the ledger> lockage node <path to the lockage repository>/dist/index.js`).
 
 Do not write `LOCKAGE_TOOLSETS` in an agent's configuration (only the default `core` is visible). Only when a human uses the maintenance/diagnostic tools, add `"LOCKAGE_TOOLSETS": "maintenance"` to the `env` of that MCP client.
 
@@ -90,7 +92,7 @@ Once both registering with an MCP client and distributing these coordination rul
 
 **The main path is installation via a plugin / Power.** You can load the coordination rules and hooks on the client side without placing anything in the target repository.
 
-- **Claude Code**: register this repository as a marketplace and install the lockage plugin (`plugins/claude`).
+- **Claude Code**: register this repository as a marketplace and install the lockage plugin (`plugins/claude`). The plugin also registers the MCP server.
 - **Antigravity**: install with `agy plugin install <local path where you cloned lockage>/plugins/antigravity`.
 - **Kiro**: register `plugins/kiro` as a Power and place the hooks into the target's `.kiro/hooks/` (`npx -y lockage setup kiro`).
 
