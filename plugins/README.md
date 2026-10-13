@@ -117,6 +117,8 @@ While private, only people with git-clone authentication can register.
 - The plugin bundles the lockage MCP server definition in `plugins/claude/.mcp.json`, which launches the npm-published artifact with `npx -y lockage`
   (the same as the hooks). Installing the plugin registers the server, so no separate `claude mcp add` is needed.
   In `/mcp` it shows as `plugin:lockage:lockage`, and its tools are named `mcp__plugin_lockage_lockage__*` (a hand-registered server's are `mcp__lockage__*`).
+  If your own `permissions.allow` or hook `matcher` names lockage tools as `mcp__lockage__...`, rewrite them to `mcp__plugin_lockage_lockage__...` when you switch
+  (the bundled AGENTS.md and skill refer to tools by their bare names such as `claim_task`, so they need no change).
 - **If you registered the server by hand before** (`claude mcp add lockage ...`), remove it with `claude mcp remove lockage -s user`
   (and `-s local` / `-s project` where you registered it per project).
   If that registration had `env` (`LOCKAGE_DB` in particular), first check it with `claude mcp get lockage` and move it to the `env` of `settings.json`

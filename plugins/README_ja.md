@@ -119,6 +119,8 @@ claude plugin install lockage@lockage
 - プラグインは lockage MCP サーバの定義を `plugins/claude/.mcp.json` に同梱しており、npm 公開物を `npx -y lockage` で起動する
   （フックと同じ）。プラグインを入れればサーバも登録されるので、別途 `claude mcp add` する必要はない。
   `/mcp` には `plugin:lockage:lockage` として出て、ツール名は `mcp__plugin_lockage_lockage__*` になる（手で登録したサーバでは `mcp__lockage__*`）。
+  自分の `permissions.allow` やフックの `matcher` に lockage のツールを `mcp__lockage__...` で書いているなら、移行時に `mcp__plugin_lockage_lockage__...` へ書き換える
+  （同梱の AGENTS.md とスキルは `claim_task` のような素のツール名で書いているので、直す必要はない）。
 - **以前に手でサーバを登録していた場合**（`claude mcp add lockage ...`）は、`claude mcp remove lockage -s user` で外す
   （プロジェクトごとに登録していたなら、そこで `-s local` / `-s project`）。
   その登録に `env`（特に `LOCKAGE_DB`）を書いていたなら、外す前に `claude mcp get lockage` で確かめ、`settings.json` の `env`（下の項目）に移しておく。
