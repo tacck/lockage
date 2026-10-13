@@ -138,7 +138,7 @@ While private, only people with git-clone authentication can register.
   that servers with the same command are merged as described, keeping the hand-registered one; and that `LOCKAGE_DB` set in the shell environment
   or in the settings `env` (given with `--settings`, and in a project's `.claude/settings.json` and `.claude/settings.local.json`) reaches the bundled server
   (the DB file was created at that path). `~/.claude/settings.json` itself was not tried (to avoid changing the user's own settings).
-  `lockage-publish` is a separate command and reads `LOCKAGE_DB` from the environment it is run in, not from the MCP server.
+- `lockage-publish` is a separate command and reads `LOCKAGE_DB` from the environment it is run in, not from the MCP server.
   When you place the ledger somewhere other than the default, pass `--db` (or set the shell environment variable `LOCKAGE_DB`) wherever you run it;
   in particular, a terminal outside Claude Code does not have the `env` of `settings.json`
   (without showing it the same ledger, even if a ticket is awaiting a PR you get `published: []`).

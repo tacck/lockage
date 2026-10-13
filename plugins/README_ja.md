@@ -140,7 +140,7 @@ claude plugin install lockage@lockage
   コマンドが同じサーバが上のとおり 1 つにまとめられ、手で登録したほうが残ること。シェルの環境変数か、設定の `env`（`--settings` で指定したもの、
   プロジェクトの `.claude/settings.json` と `.claude/settings.local.json`）に置いた `LOCKAGE_DB` が同梱のサーバに届くこと（そのパスに DB ファイルが作られた）。
   `~/.claude/settings.json` そのものは、利用者自身の設定を変えないよう試していない。
-  `lockage-publish` は別のコマンドで、`LOCKAGE_DB` を MCP サーバからではなく、実行した環境から読む。
+- `lockage-publish` は別のコマンドで、`LOCKAGE_DB` を MCP サーバからではなく、実行した環境から読む。
   台帳を既定以外に置いたときは、実行する場所で `--db` を付ける（またはシェルの環境変数 `LOCKAGE_DB` を設定する）。
   特に Claude Code の外の端末には `settings.json` の `env` が無い
   （同じ台帳を見せないと、PR 化待ちのチケットがあっても `published: []` になる）。
