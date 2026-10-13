@@ -5,8 +5,8 @@
 lockage の協調ルール（`AGENTS.md`）と lockage-workflow スキルを、各 AI クライアントのプラグインとして配る。
 Claude Code・Antigravity はプラグインで入れると、導入先リポジトリには何も置かずに lockage を使える。
 Kiro は Power の登録に加えて、導入先の `.kiro/hooks/` への hook の雛形の配置が要る（下の「Kiro（Power）」）。
-Claude Code のプラグインは lockage MCP サーバの定義（`.mcp.json`）も同梱しているので、プラグインを入れればサーバも登録される。
-ほかのクライアントでは、lockage MCP サーバの登録が別に要る。
+Claude Code・Antigravity のプラグインは lockage MCP サーバの定義（`.mcp.json` / `mcp_config.json`）も同梱しているので、プラグインを入れればサーバも登録される。
+Kiro では、lockage MCP サーバの登録が別に要る。
 
 ## 構成
 
@@ -14,7 +14,7 @@ Claude Code のプラグインは lockage MCP サーバの定義（`.mcp.json`�
 |---|---|
 | `shared/` | **正本。** `AGENTS.md`・`skills/lockage-workflow/SKILL.md`。どのクライアントからも直接は読ませない。フックの判定ロジックは `src/hook/` の TypeScript 実装に移植済みで、各クライアントは `npx -y lockage hook ...` で起動する。 |
 | `claude/` | **Claude Code プラグインのルート。** `.claude-plugin/plugin.json`・`.mcp.json`（MCP サーバの定義）・`hooks/hooks.json`・`agents/lockage-worker.md`。マーケットプレイスはリポジトリ直下の `.claude-plugin/marketplace.json`。 |
-| `antigravity/` | **Antigravity プラグインのルート。** `plugin.json`・`hooks.json`。 |
+| `antigravity/` | **Antigravity プラグインのルート。** `plugin.json`・`mcp_config.json`（MCP サーバの定義）・`hooks.json`。 |
 | `kiro/` | **Kiro Power のルート**（`POWER.md` 形式）。`POWER.md`・`mcp.json` の雛形・`steering/`（`AGENTS.md` と lockage-workflow スキルのコピーを含む）・`hooks/`（`.kiro/hooks/` へ置く雛形）。 |
 
 各クライアントはインストール時にプラグインのディレクトリだけをコピーして読むので、プラグインの外（`../shared` など）は参照できない。
@@ -222,13 +222,9 @@ agy は Git の URL からも入れられるとされるが、リポジトリの
     プラグインのルートを指す環境変数は無いので、`hooks.json` の session hook は `--agents-md ./AGENTS.md` のように
     ルートからの相対パスで AGENTS.md の場所を渡す（CLI が作業ディレクトリで絶対化する）。
   - 非対話実行（`agy -p`）では確認に答える人がいないため、`force_ask` は拒否になる（`ask` も、許可ルールが無ければ拒否になる。フックが無いときと同じ。agy 1.3.2 で確認）。
-- lockage MCP サーバ自体の登録はプラグインに含めない（Antigravity のプラグインが MCP サーバを同梱できるかは未確認のため）。リポジトリ直下の `README.md` の
-  「MCP クライアントへの登録」の内容を、`agy mcp add` で登録する（全エージェントで同じ台帳を指すこと。`lockage-publish` に台帳を見せる方法は Claude Code 版と同じ。例:
-  `agy mcp add --env LOCKAGE_DB=<台帳の絶対パス> lockage node <lockage のリポジトリのパス>/dist/index.js`）。
-  登録先は `~/.gemini/config/mcp_config.json` で、Antigravity 2.0・IDE も同じファイルを読む（`agy mcp list` が
-  このファイルの内容を一覧することは agy 1.3.2 で確認。2.0・IDE が読むことはドキュメントによる）。
-  登録できたかは `agy mcp list` に lockage が出ることで確かめる。登録しないと、AGENTS.md の「ツールが 1 つも見つからない場合」として
-  lockage を使わずに作業する。
+- プラグインは lockage MCP サーバの定義を `plugins/antigravity/mcp_config.json` に同梱しており、npm 公開物を `npx -y lockage` で起動する（フックと同じ）。プラグインを入れればサーバも登録されるので、別途 `agy mcp add` する必要はない。
+- **以前に手でサーバを登録していた場合**（`agy mcp add lockage ...`）は、`agy mcp remove lockage` で外す。
+- 同梱の定義は `env` を持たないので、台帳は既定の `~/.lockage/lockage.sqlite` になる。別の場所に置くときは、Antigravity を起動するシェルの環境変数に `LOCKAGE_DB` を設定する。サーバはそれを引き継ぐ。全エージェントで同じ台帳を指すこと。`lockage-publish` は MCP サーバの環境を受け取らないので、台帳を既定以外に置いたときは、`--db` か シェルの環境変数 `LOCKAGE_DB` で同じ台帳を見せる（見せないと、PR 化待ちのチケットがあっても `published: []` になる）。
 - lockage-worker（サブエージェント）は Antigravity 用には用意していない（Antigravity のサブエージェントはプラグインのルートの `agents/` に置ける）。
 - 以前の手順で `~/.gemini/config/skills/lockage-workflow/` に置いたスキルと、導入先に置いた `GEMINI.md` は、
   プラグインのスキル・フックと重複するので削除する（導入先の `AGENTS.md` の扱いは Claude Code のプラグインと同じ）。

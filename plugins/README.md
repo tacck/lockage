@@ -5,8 +5,8 @@
 Distribute lockage's coordination rules (`AGENTS.md`) and the lockage-workflow skill as plugins for each AI client.
 With a plugin install, Claude Code and Antigravity can use lockage without placing anything in the target repository.
 Kiro, in addition to registering the Power, needs the hook templates placed into the target's `.kiro/hooks/` (see "Kiro (Power)" below).
-The Claude Code plugin also bundles the lockage MCP server definition (`.mcp.json`), so installing the plugin registers the server too.
-For the other clients, registering the lockage MCP server is needed separately.
+The Claude Code and Antigravity plugins also bundle the lockage MCP server definition (`.mcp.json` / `mcp_config.json`), so installing the plugin registers the server too.
+For Kiro, registering the lockage MCP server is needed separately.
 
 ## Structure
 
@@ -14,7 +14,7 @@ For the other clients, registering the lockage MCP server is needed separately.
 |---|---|
 | `shared/` | **Canonical source.** `AGENTS.md`, `skills/lockage-workflow/SKILL.md`. Not read directly from any client. The hook decision logic has been ported to the TypeScript implementation in `src/hook/`, and each client launches it via `npx -y lockage hook ...`. |
 | `claude/` | **Root of the Claude Code plugin.** `.claude-plugin/plugin.json`, `.mcp.json` (the MCP server definition), `hooks/hooks.json`, `agents/lockage-worker.md`. The marketplace is `.claude-plugin/marketplace.json` at the repository root. |
-| `antigravity/` | **Root of the Antigravity plugin.** `plugin.json`, `hooks.json`. |
+| `antigravity/` | **Root of the Antigravity plugin.** `plugin.json`, `mcp_config.json` (the MCP server definition), `hooks.json`. |
 | `kiro/` | **Root of the Kiro Power** (`POWER.md` format). `POWER.md`, the `mcp.json` template, `steering/` (includes copies of `AGENTS.md` and the lockage-workflow skill), `hooks/` (templates to place into `.kiro/hooks/`). |
 
 At install time each client copies and reads only the plugin's directory, so it cannot reference outside the plugin (such as `../shared`).
@@ -220,13 +220,9 @@ unconfirmed. Until confirmed, clone first and install by path.
     There is no environment variable pointing at the plugin root, so the session hook in `hooks.json` passes the location of AGENTS.md with a path relative to the root,
     like `--agents-md ./AGENTS.md` (the CLI makes it absolute at the working directory).
   - In non-interactive runs (`agy -p`), since there is no one to answer the confirmation, `force_ask` becomes a rejection (`ask` too becomes a rejection if there is no allow rule. Same as when there is no hook. Confirmed on agy 1.3.2).
-- Registering the lockage MCP server itself is not included in the plugin (whether an Antigravity plugin can bundle an MCP server has not been confirmed). Register the contents of
-  "Registering with an MCP client" in the repository-root `README.md` with `agy mcp add` (all agents point at the same ledger. The way to show the ledger to `lockage-publish` is the same as the Claude Code version. Example:
-  `agy mcp add --env LOCKAGE_DB=<absolute path to the ledger> lockage node <path to the lockage repository>/dist/index.js`).
-  The registration destination is `~/.gemini/config/mcp_config.json`, which Antigravity 2.0, the IDE read too (`agy mcp list` listing
-  the contents of this file is confirmed on agy 1.3.2; that 2.0, the IDE read it is per the docs).
-  Confirm registration by lockage appearing in `agy mcp list`. Without registration, per AGENTS.md's "when no tools are found at all" you
-  work without lockage.
+- The plugin bundles the lockage MCP server definition in `plugins/antigravity/mcp_config.json`, launching the npm-published artifact via `npx -y lockage` (same as the hooks). Installing the plugin registers the server too, so running `agy mcp add` separately is not needed.
+- **If you registered the server by hand before** (`agy mcp add lockage ...`), remove it with `agy mcp remove lockage`.
+- Since the bundled definition has no `env`, the ledger defaults to `~/.lockage/lockage.sqlite`. To place it elsewhere, set `LOCKAGE_DB` in the shell environment from which Antigravity is launched; the server inherits it. Line everyone up so all agents point at the same ledger. Since `lockage-publish` does not receive the MCP server's environment, when placing the ledger anywhere other than the default, show it the same ledger via `--db` or the shell environment variable `LOCKAGE_DB` (if you do not, even if tickets are waiting to become PRs, they show `published: []`).
 - lockage-worker (subagent) is not provided for Antigravity (an Antigravity subagent can be placed in `agents/` at the plugin root).
 - Delete the skill an earlier procedure placed in `~/.gemini/config/skills/lockage-workflow/` and the `GEMINI.md` placed in the target, since they
   duplicate the plugin's skill, hooks (the handling of the target's `AGENTS.md` is the same as the Claude Code plugin).
