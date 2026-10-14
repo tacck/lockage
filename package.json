@@ -3,6 +3,10 @@
   "version": "0.9.4",
   "description": "Lockage — an MCP server for multiple coding LLMs to collaborate around a local git repository (single host)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tacck/lockage.git"
+  },
   "type": "module",
   "files": [
     "dist",

@@ -1,0 +1,104 @@
+name: version-bump
+
+# Run this manually from the Actions tab to bump the semantic version. Pick
+# which part of semver to raise (patch / minor / major); the workflow bumps
+# all version-carrying files, then opens a PR targeting `dev`. Merging that PR
+# into dev (and later dev -> main) is what releases via the publish workflow.
+# See docs/branch-strategy.md and docs/releasing.md.
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: 'Which part of the semantic version to bump'
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      # Always base the bump on dev (the default/integration branch), regardless
+      # of which ref the workflow was dispatched from.
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `npm version <level> --no-git-tag-version` updates package.json and
+      # package-lock.json without committing or tagging.
+      - name: Bump version
+        id: bump
+        run: |
+          new_version="$(npm version "${{ inputs.level }}" --no-git-tag-version)"
+          # npm prints the new version prefixed with 'v' (e.g. v0.9.5); strip it.
+          new_version="${new_version#v}"
+          echo "version=${new_version}" >> "$GITHUB_OUTPUT"
+          echo "New version: ${new_version}"
+
+      # Keep the two plugin.json files in sync with package.json (the rule
+      # enforced by test/plugins.test.ts).
+      - name: Sync plugin version files
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const version = process.env.VERSION;
+            for (const file of [
+              "plugins/claude/.claude-plugin/plugin.json",
+              "plugins/antigravity/plugin.json",
+            ]) {
+              const json = JSON.parse(fs.readFileSync(file, "utf8"));
+              json.version = version;
+              fs.writeFileSync(file, JSON.stringify(json, null, 2) + "\n");
+            }
+          '
+
+      # Guarantee package-lock.json reflects the new version (npm version
+      # already updates it; this is a belt-and-braces no-op otherwise).
+      - name: Ensure lockfile is in sync
+        run: npm install --package-lock-only
+
+      - name: Create pull request
+        env:
+          # gh needs a token; the default GITHUB_TOKEN has repo + PR scope here.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+          LEVEL: ${{ inputs.level }}
+        run: |
+          branch="release/bump-v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add package.json package-lock.json \
+            plugins/claude/.claude-plugin/plugin.json \
+            plugins/antigravity/plugin.json
+          git commit -m "chore: bump version to v${VERSION} (${LEVEL})"
+          git push origin "$branch"
+          gh pr create \
+            --base dev \
+            --head "$branch" \
+            --title "chore: bump version to v${VERSION} (${LEVEL})" \
+            --body "Automated ${LEVEL} version bump to \`v${VERSION}\`.
+
+          Updated so the three version files stay in sync:
+          - \`package.json\`
+          - \`plugins/claude/.claude-plugin/plugin.json\`
+          - \`plugins/antigravity/plugin.json\`
+          - \`package-lock.json\` (kept in sync)
+
+          Merge this into \`dev\`. The release happens later via a \`dev\` -> \`main\` PR, which triggers the publish workflow."
