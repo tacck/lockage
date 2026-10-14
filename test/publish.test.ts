@@ -7,11 +7,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { openDb, type CoordDb } from '../src/db/index.ts';
-import { createTask, claimTask } from '../src/lockage/claim.ts';
+import { createTask, claimTask, releaseTask } from '../src/lockage/claim.ts';
 import { claimFiles, listClaims } from '../src/lockage/files.ts';
 import { openTicket } from '../src/lockage/tickets.ts';
 import { assignWorktree } from '../src/lockage/worktree.ts';
 import { onTaskDone } from '../src/lockage/merge.ts';
+import { computePublisherStatus } from '../src/lockage/board.ts';
 import { short } from '../src/lockage/git.ts';
 import { LockageClient } from '../src/launcher/client.ts';
 import {
@@ -643,6 +644,119 @@ test('reconcileMergedPrs: for a ticket with a not-done task remaining, do not re
   // the skip path does not reach worktree release (worktrees stay active).
   const after = await client.callTool('list_worktrees', {});
   assert.equal(after.length, 2, 'while a not-done task remains, do not release worktrees');
+});
+
+// ── Issue #7: abandoned を含むチケットでも follow-up が pending_update に載ること ──────────
+// PR 作成済みのチケットに done タスクを足すと ticket_ready が再発火し pending_update に載るはずだが、
+// 同じチケットに abandoned タスクが残っていると、従来は abandoned が「未完了」に数えられて再発火せず、
+// pending_update_count が 0 のままだった（Issue #7 の症状 1）。abandoned を終端状態として扱う修正で解消する。
+test('publisher_status: a follow-up on a ticket that also has an abandoned task appears in pending_update (Issue #7)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-pub2-followup-abandoned-'));
+  const dbPath = join(workdir, 'lockage.sqlite');
+  const repoPath = initRepo(workdir);
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+
+  // 2 つの done タスクで ready なチケットを作る（integration_branch + ticket_ready）
+  let cdb = openDb({ path: dbPath, hostId: 'host-test' });
+  const { ticketId } = seedReadyTicket(cdb, repoPath, 'fu');
+  cdb.close();
+
+  // PR を作成（pr_opened を board に残す）
+  const client = new LockageClient({ serverEntry: SERVER_ENTRY, dbPath, toolsets: ['publisher'] });
+  await client.connect();
+  t.after(() => client.close());
+  const { ticketId: pubId } = await publishOne(client, repoPath);
+  assert.equal(pubId, ticketId);
+
+  // PR 作成後に、同じチケットへ (1) abandoned タスク D と (2) done タスク C を足す。
+  // createTask はチケットを re-arm する（ticket_ready_at を NULL に戻す）。
+  cdb = openDb({ path: dbPath, hostId: 'host-test' });
+
+  // (1) D を作って claim → abandoned で取り下げる（終端状態だが done ではない）
+  const taskD = createTask(cdb, { repo: 'repo', title: 'later abandoned D', ticketId });
+  assignWorktree(cdb, { agentId: 'fu-D', repoPath, taskId: taskD.id });
+  const claimedD = claimTask(cdb, taskD.id, 'fu-D', taskD.version);
+  assert.equal(claimedD.ok, true);
+  const relD = releaseTask(cdb, taskD.id, 'fu-D', 'abandoned');
+  assert.equal(relD.ok, true);
+
+  // (2) C を作って claim → コミット → task_done。全タスクが done+abandoned になり ticket_ready を再発火。
+  const taskC = createTask(cdb, { repo: 'repo', title: 'later done C', ticketId });
+  const wc = assignWorktree(cdb, { agentId: 'fu-C', repoPath, taskId: taskC.id });
+  const claimedC = claimTask(cdb, taskC.id, 'fu-C', taskC.version);
+  assert.equal(claimedC.ok, true);
+  commitInWorktree(wc.worktree_path, 'fu-c.js', '// C\n');
+  const rc = onTaskDone(cdb, {
+    agentId: 'fu-C',
+    worktreePath: wc.worktree_path,
+    branch: wc.branch,
+    repo: repoPath,
+    taskId: taskC.id,
+  });
+  assert.equal(rc.ok, true, `onTaskDone C: ${JSON.stringify(rc)}`);
+
+  // abandoned を終端として扱うので ticket_ready が再発火し、pending_update に当該チケットが載る。
+  const status = computePublisherStatus(cdb);
+  cdb.close();
+  assert.equal(status.pending_update_count, 1, 'follow-up が pending_update に 1 件載る');
+  assert.ok(
+    status.pending_update_tickets.some((tk) => tk.ref_ticket_id === ticketId),
+    'pending_update_tickets に当該チケットが含まれる',
+  );
+});
+
+// ── Issue #7: 後から追加したタスクが abandoned のとき reconcile が skip せずチケットを閉じること ──────────
+// 既存の 'skipped_unmerged_tasks' テスト（後から追加するのが通常の open タスク）は変更せず残す。
+// ここでは後から追加するタスクを abandoned（終端状態）にした場合、reconcileMergedPrs が B-loss ガードで
+// skip せず result:'merged' を返し、チケットを closed にして worktree/claim を解放することを検証する。
+test('reconcileMergedPrs: a later-added task that is abandoned does not block reconcile; the ticket is closed (Issue #7)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-rec-abandoned-'));
+  const dbPath = join(workdir, 'lockage.sqlite');
+  const repoPath = initRepo(workdir);
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+
+  const cdb = openDb({ path: dbPath, hostId: 'host-test' });
+  const { ticketId } = seedReadyTicket(cdb, repoPath, 'ab');
+  // 後から同じチケットへタスクを足し、claim → abandoned にする（終端状態だが done ではない）。
+  const later = createTask(cdb, { repo: 'repo', title: 'a later-added abandoned task', ticketId });
+  assignWorktree(cdb, { agentId: 'ab-later', repoPath, taskId: later.id });
+  const claimedLater = claimTask(cdb, later.id, 'ab-later', later.version);
+  assert.equal(claimedLater.ok, true);
+  const rel = releaseTask(cdb, later.id, 'ab-later', 'abandoned');
+  assert.equal(rel.ok, true);
+  cdb.close();
+
+  const client = new LockageClient({ serverEntry: SERVER_ENTRY, dbPath, toolsets: ['publisher'] });
+  await client.connect();
+  t.after(() => client.close());
+
+  const { ticketId: pubId } = await publishOne(client, repoPath);
+  assert.equal(pubId, ticketId);
+
+  const beforeCount = (await client.callTool('list_worktrees', {})).length;
+  // seedReadyTicket の 2 タスク（done）＋後から足した abandoned タスクで計 3 件が active。
+  // releaseTask は claim を解放するが worktree 割り当ては解放しないため、abandoned の worktree も残る。
+  assert.equal(beforeCount, 3, 'before reconcile 2 done-task + 1 abandoned-task worktrees are active');
+
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const outcomes = await reconcileMergedPrs(client, adapter, {
+    repoPath,
+    agentId: 'publisher',
+    deleteLocalBranch: () => true,
+  });
+
+  assert.equal(outcomes.length, 1);
+  // abandoned は終端状態なので skip されず、通常の merge クリーンアップが走る（Issue #7 の修正点）。
+  assert.equal(outcomes[0].result, 'merged', 'abandoned は未完了に数えないので skip しない');
+  assert.equal((outcomes[0] as any).ticketClosed, 'closed', 'reconcile がチケットを閉じる');
+
+  // チケットが closed になる。
+  const after = await client.callTool('read_ticket', { ticket_id: ticketId });
+  assert.equal(after.ticket.status, 'closed', 'ticket.status is closed');
+  // release_ticket_worktrees は done タスクの worktree のみ解放対象（abandoned は対象外）なので、
+  // done の 2 件が解放され、abandoned の 1 件は残る（Issue #7 の回避策どおり別途 release_worktree で片付ける）。
+  const afterWt = await client.callTool('list_worktrees', {});
+  assert.equal(afterWt.length, 1, 'reconcile released the 2 done-task worktrees; the abandoned one remains');
 });
 
 // ── #37: dirty-mixed — release the clean ones and keep the dirty ones active (worktreesReleased < the assignment count) ──

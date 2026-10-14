@@ -8,6 +8,7 @@ import { releaseWorktree } from './worktree.js';
 import { postBoard, wake, isReady, resolveQuestionsForTask } from './board.js';
 import { completeTask, claimTask } from './claim.js';
 import { releaseClaimsForTask } from './files.js';
+import { terminalStatusNotInClause } from './task-status.js';
 
 /**
  * §4.6 Integration merge gate (serialization + 3-way precheck, requirement FR-1.6).
@@ -652,8 +653,13 @@ function tryEmitTicketReady(cdb: CoordDb, ticketId: string | null): void {
   let shouldEmit = false;
   db.exec('BEGIN IMMEDIATE');
   try {
+    // Issue #7: abandoned は終端状態なので未完了に数えない。
+    // 終端状態（'done','abandoned'）でないタスクが 0 件のときだけ ticket_ready を出す。
+    // SQL 断片は task-status.ts の共通定義から導出する（SQL 側に状態値をハードコードしない）。
     const remaining = db
-      .prepare(`SELECT COUNT(*) AS n FROM tasks WHERE ticket_id = ? AND status != 'done'`)
+      .prepare(
+        `SELECT COUNT(*) AS n FROM tasks WHERE ticket_id = ? AND ${terminalStatusNotInClause()}`,
+      )
       .get(ticketId) as { n: number };
     if (remaining.n === 0) {
       const info = db
