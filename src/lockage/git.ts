@@ -85,6 +85,83 @@ export function resolveRefSha(repoPath: string, ref: string): string | null {
 }
 
 /**
+ * best-effort ヘルパー: リポジトリに設定された remote 名を 1 つ決める（Issue #8）。
+ *
+ * `git remote` の出力から remote 名の一覧を取り、'origin' があれば 'origin' を優先して返す。
+ * 'origin' が無ければ最初に列挙された remote 名を返す。remote が 1 つも無い場合（ローカルのみの
+ * リポジトリ、Issue #8 の「リモートが無い環境」）は null を返す。
+ *
+ * 既存ヘルパー（resolveBaseBranch / resolveRefSha）と同じく best-effort で失敗を握りつぶす方針に
+ * 揃える。git が失敗した場合（リポジトリでない等）も例外を投げず null を返す。
+ */
+export function resolveRemoteName(repoPath: string): string | null {
+  let out: string;
+  try {
+    out = git(repoPath, ['remote']);
+  } catch {
+    return null;
+  }
+  const remotes = out.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  if (remotes.length === 0) return null;
+  if (remotes.includes('origin')) return 'origin';
+  return remotes[0];
+}
+
+/**
+ * best-effort ヘルパー: base ブランチをリモートから fetch する（Issue #8）。
+ *
+ * `git fetch <remote> <baseBranch>` を実行する。この形の fetch は FETCH_HEAD とリモート追跡 ref
+ * `refs/remotes/<remote>/<baseBranch>` を更新するだけで、ローカルの `refs/heads/<baseBranch>` や
+ * 作業ツリー・チェックアウト状態には一切触れない（本流を checkout しない運用を壊さない）。
+ *
+ * 成功時は true、失敗時（リモート不通・ブランチ不在・ネットワーク無し等）は false を返す。
+ * best-effort 方針に従い例外は投げない。
+ */
+export function fetchBase(repoPath: string, remote: string, baseBranch: string): boolean {
+  try {
+    // refspec を明示せずブランチ名だけを渡すことで、ローカルの同名ブランチは更新せず、
+    // FETCH_HEAD とリモート追跡 ref のみを更新する安全な fetch になる。
+    git(repoPath, ['fetch', remote, baseBranch]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * best-effort ヘルパー: リモート追跡 ref が存在するか確認し、その ref 名を返す（Issue #8）。
+ *
+ * `refs/remotes/<remote>/<baseBranch>` を `git show-ref --verify --quiet` で確認し、存在すれば
+ * `<remote>/<baseBranch>`（例 'origin/dev'）を返す。存在しなければ null。git 失敗時も null を返す。
+ * best-effort 方針に従い例外は投げない。
+ */
+export function remoteTrackingRef(repoPath: string, remote: string, baseBranch: string): string | null {
+  try {
+    git(repoPath, ['show-ref', '--verify', '--quiet', `refs/remotes/${remote}/${baseBranch}`]);
+    return `${remote}/${baseBranch}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * best-effort ヘルパー: ローカル ref がリモート追跡 ref からいくつ遅れているかを数える（Issue #8 提案 2）。
+ *
+ * `git rev-list --count <localRef>..<remoteTrackingRef>` を実行し、remoteTrackingRef にあって
+ * localRef に無いコミット数（＝ローカルがリモートから遅れている件数）を返す。
+ * ref 解決不能・git 失敗・数値変換不能のときは null を返す。best-effort 方針に従い例外は投げない。
+ */
+export function countBehind(repoPath: string, localRef: string, remoteTrackingRef: string): number | null {
+  try {
+    const out = git(repoPath, ['rev-list', '--count', `${localRef}..${remoteTrackingRef}`]);
+    const n = Number.parseInt(out.trim(), 10);
+    return Number.isNaN(n) ? null : n;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * A best-effort helper that lists a worktree's working-tree changed files (Issue #52 proposal 2).
  *
  * Runs `git status --porcelain -z` against worktreePath (same style as classifyRemoveFailure = take

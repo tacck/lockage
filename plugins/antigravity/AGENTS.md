@@ -62,6 +62,11 @@ Even in an environment where the skill is unavailable, you can work by following
    Work only inside the `worktree_path` that `assign_worktree` returned.
    When you cannot move into the worktree yourself, ask the user to switch with
    `post_board(kind:"question")` and wait. Do not start on the mainline.
+   なお `base_ref` を省略した `assign_worktree` は、既定でローカル base をリモート追跡 (`origin/<base>`) に
+   追従させてから切る（Issue #8）。本流を手で `git pull` しなくても最新の `origin/<base>` から作業が始まり、
+   応答に `base_source` / `base_ref_used` / `behind`（ローカル base が `origin/<base>` から遅れていた件数）が返る。
+   リモートが無いリポジトリや追跡 ref が取れない場合は従来どおりローカル base から切り、挙動は変わらない。
+   リモート追従を無効化したいときは `base_from_remote:false` を渡す。`base_ref` 明示時はこの追従を行わない。
 
 3. **Do not snatch a task you could not claim; move to another task.**
    When the files you touch during work spread outside the claim's declaration (when they appear in the
@@ -139,7 +144,8 @@ and re-branch from the ticket integration branch to work.
 3. `claim_task` → pass the `integration_branch` you read as `base_ref`, and
    cut the worktree **from the integration branch** with `assign_worktree(..., base_ref=<integration_branch>)`.
    Do not assemble a branch name (a ticket created before the rename stays `lockage/issue/<short-id>`).
-   Omitting `base_ref` cuts from the default branch and would not carry the earlier fix.
+   Omitting `base_ref` cuts from the (remote-tracking) default branch and would not carry the earlier fix
+   （`base_ref` を明示したときはリモート追従 `base_from_remote` を行わず、その統合ブランチからそのまま切る）。
 4. Work → `git commit` → `task_done` (dirty is auto-computed. `publish_dirty` only when you want to pre-announce).
 5. Invoke `lockage-publish --repo-path <absolute path> --ticket <ticket_id>`.
    When a done task is added to a ticket that already has a PR, `ticket_ready` is re-issued and

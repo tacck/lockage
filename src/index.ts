@@ -781,16 +781,21 @@ export function buildServer(
         repo_path: z.string().describe('the repo root on the filesystem'),
         task_id: z.string().nullable().optional(),
         base_ref: z.string().optional().describe('the branch to fork from (default: the first of dev / stg / main / master that actually exists in the repo)'),
+        base_from_remote: z.boolean().optional().describe('when base_ref is omitted, fetch and fork from the remote-tracking ref (origin/<base>) so the fork point is not a stale local base (default: true). Falls back to the local base when there is no remote or no tracking ref. false forks from the local base as before. Ignored when base_ref is given.'),
       },
     },
     async (a) => {
       heartbeat(cdb, a.agent_id);
+      // Issue #8: base_ref が明示された場合は base_from_remote より base_ref を優先する
+      // （follow-up の integration_branch 指定を壊さない）。assignWorktree 側で baseRef が
+      // undefined でないときはリモート追従をスキップするため、ここでは両方そのまま伝搬すればよい。
       return ok(
         assignWorktree(cdb, {
           agentId: a.agent_id,
           repoPath: a.repo_path,
           taskId: a.task_id ?? null,
           baseRef: a.base_ref,
+          baseFromRemote: a.base_from_remote,
         }),
       );
     },
