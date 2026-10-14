@@ -35,15 +35,19 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # Trusted Publishing requires Node >= 22.14 and npm >= 11.5.1.
-          # Pin to a 22.x that satisfies this; npm is upgraded explicitly below.
-          node-version: '22.14'
+          # Pin a 22.x that satisfies every constraint below:
+          #  - node:sqlite exposes FTS5 only on >= 22.16.0 (enabled upstream in
+          #    24.0.0 via nodejs/node#57621, backported to 22.16). Older patches
+          #    (e.g. 22.14) lack it, so `npm test` dies with "no such module: fts5".
+          #  - Trusted Publishing needs npm >= 11.5.1 (satisfied by the upgrade
+          #    step below), and npm@^11 supports Node >= 22.9.0.
+          node-version: '22.22'
           registry-url: 'https://registry.npmjs.org'
 
       # Trusted Publishing needs npm >= 11.5.1, but the npm bundled with Node
       # 22.x is older (10.x), so upgrade before publishing. Pin to the 11.x line
       # on purpose: `npm@latest` is 12.x, which requires Node ^22.22.2 and would
-      # fail with EBADENGINE on the Node 22.14 pinned above. npm@11 (currently
+      # fail with EBADENGINE on the Node 22.22 pinned above. npm@11 (currently
       # 11.21.x) satisfies the 11.5.1 floor and supports Node >= 22.9.0.
       - name: Upgrade npm for Trusted Publishing
         run: npm install -g npm@^11
