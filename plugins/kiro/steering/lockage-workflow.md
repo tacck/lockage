@@ -71,6 +71,16 @@ For work that falls under the top of AGENTS.md's "When the user instructs you no
   → do not edit the main tree directly (the exception is only the top of AGENTS.md's "When the user instructs you not to use lockage")
 ```
 
+> **base_ref を省くと既定でリモート追跡から切る（Issue #8）**: `base_ref` を省略すると、`assign_worktree` は
+> 切る前に `git fetch <remote> <base>` でローカル base をリモート追跡 (`origin/<base>`) に追従させ、
+> **`origin/<base>` から worktree を切る**（本流を手で `git pull` しなくても最新から始まる）。
+> このとき応答に `base_source:"remote"`、`base_ref_used:"origin/<base>"`、`behind:<件数>`（ローカル base が
+> `origin/<base>` から遅れていたコミット数）が返る。**リモートが無いリポジトリや、そのブランチの追跡 ref が
+> 取れない場合は従来どおりローカル base から切り**（`base_source:"local"`、`behind:null`）、挙動は変わらない。
+> リモート追従を無効化してローカル base から切りたいときは `base_from_remote:false` を渡す。
+> なお `base_ref` を明示した呼び出し（後述の follow-up の統合ブランチ指定など）は、`base_from_remote` に関係なく
+> その ref をそのまま使う。
+
 ## Phase 2: During work
 
 ```
@@ -188,7 +198,8 @@ earlier fix, so pass the integration branch to `base_ref`.
 □ claim_task(task_id, agent_id, expected_version)
 □ assign_worktree(agent_id, repo_path, task_id,
     base_ref:<integration_branch>)
-  → omitting base_ref cuts from the default branch and would not carry the earlier fix
+  → omitting base_ref cuts from the (remote-tracking) default branch and would not carry the earlier fix
+  → base_ref を明示するとリモート追従 (base_from_remote) は行わず、その統合ブランチからそのまま切る
 □ Work → git commit (dirty is auto-computed. publish_dirty only when you want to pre-announce)
 □ task_done(agent_id, worktree_path, branch, repo, task_id)
 □ lockage-publish --repo-path <repo_path> --ticket <ticket_id>
@@ -245,6 +256,11 @@ Omit `ttl_sec` (default 8 hours). Do not omit `task_id`.
 ```json
 { "agent_id": "<agent_id>", "repo_path": "<repository absolute path>", "task_id": "<task_id>" }
 ```
+
+`base_ref`（任意）: 切り元ブランチを明示する。省略時は dev/stg/main/master のうち実在する最初のものを使う。
+`base_from_remote`（任意、既定 true 相当）: `base_ref` 省略時に、ローカル base をリモート追跡 (`origin/<base>`) に
+追従させてから切る。リモートが無い / 追跡 ref が無いときはローカル base から切る。`false` で従来どおりローカルから切る。
+`base_ref` を明示したときは無視される。follow-up の統合ブランチ指定（`base_ref:<integration_branch>`）はそのまま使われる。
 
 ### publish_dirty
 ```json
