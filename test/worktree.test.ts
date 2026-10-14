@@ -897,3 +897,142 @@ test('assign: on a reassignment (reused=true) base_sha stays at the first value 
   // cleanup.
   git(repoPath, ['worktree', 'remove', '--force', a.worktree_path]);
 });
+
+// ── Issue #8: assign_worktree がローカル base ではなくリモート追跡 (origin/<base>) から切る ──────────
+// 外部ネットワークを使わず、ローカルの bare リポジトリを remote として add し push することで
+// git fetch とリモート追跡 ref をネットワーク無しに再現する（共有 repoPath を汚さないよう各テストで
+// 専用リポジトリを作る）。
+
+/**
+ * 専用の作業用 git リポジトリを作る。initialBranch を既定ブランチにし初期コミットを置く。
+ * @returns 作成したリポジトリのパス。
+ */
+function makeRepo(tag: string, initialBranch: string): string {
+  const p = join(root, `issue8-${tag}`);
+  mkdirSync(p);
+  git(p, ['init', '-q', '-b', initialBranch]);
+  git(p, ['config', 'user.email', 'test@example.com']);
+  git(p, ['config', 'user.name', 'test']);
+  writeFileSync(join(p, 'README.md'), '# test\n');
+  git(p, ['add', '.']);
+  git(p, ['commit', '-q', '-m', 'init']);
+  return p;
+}
+
+/**
+ * repo に bare リモートを add し、`dev` を 1 コミット進めて push した後、ローカル `dev` を 1 件戻す。
+ * これで「ローカル dev が origin/dev から 1 件遅れている」状態を作る（ネットワーク不要）。
+ * @returns origin/dev の進んだ SHA。
+ */
+function setupLaggingRemote(repo: string, tag: string): string {
+  git(repo, ['branch', 'dev']);
+  git(repo, ['checkout', '-q', 'dev']);
+  const bare = join(root, `issue8-remote-${tag}.git`);
+  mkdirSync(bare);
+  git(bare, ['init', '-q', '--bare', '-b', 'dev']);
+  git(repo, ['remote', 'add', 'origin', bare]);
+  writeFileSync(join(repo, 'remote-only.txt'), 'from remote\n');
+  git(repo, ['add', '.']);
+  git(repo, ['commit', '-q', '-m', 'advance dev on remote']);
+  git(repo, ['push', '-q', 'origin', 'dev']);
+  const remoteSha = git(repo, ['rev-parse', '--verify', 'dev^{commit}']);
+  // ローカル dev を 1 件戻してリモートから遅らせる。
+  git(repo, ['reset', '-q', '--hard', 'HEAD~1']);
+  return remoteSha;
+}
+
+test('assign (Issue #8): base_ref 省略で remote があるとき origin/dev から切り base_sha が origin/dev に一致する', () => {
+  const repo = makeRepo('remote', 'main');
+  const remoteSha = setupLaggingRemote(repo, 'remote');
+  const localSha = git(repo, ['rev-parse', '--verify', 'dev^{commit}']);
+  assert.notEqual(localSha, remoteSha, '前提: ローカル dev と origin/dev が異なる');
+
+  const r = assignWorktree(cdb, { agentId: 'issue8-remote', repoPath: repo });
+
+  // リモート追跡から切ったことが応答に出る。
+  assert.equal(r.base_source, 'remote');
+  assert.equal(r.base_ref_used, 'origin/dev');
+  assert.equal(r.behind, 1, 'ローカル dev は origin/dev から 1 件遅れている');
+
+  // 切った worktree の HEAD は origin/dev の SHA。
+  const wtHead = git(r.worktree_path, ['rev-parse', 'HEAD']);
+  assert.equal(wtHead, remoteSha, 'worktree の HEAD は origin/dev の SHA');
+
+  // 台帳の base_sha も origin/dev の SHA（古いローカル SHA ではない）。
+  const row = cdb.db
+    .prepare(`SELECT base_sha FROM worktree_assignments WHERE agent_id = ? AND status = 'active'`)
+    .get('issue8-remote') as { base_sha: string | null };
+  assert.equal(row.base_sha, remoteSha, 'base_sha は origin/dev の SHA');
+  assert.notEqual(row.base_sha, localSha, 'base_sha は古いローカル SHA ではない');
+
+  git(repo, ['worktree', 'remove', '--force', r.worktree_path]);
+});
+
+test('assign (Issue #8): remote が無いリポジトリでは従来どおりローカル base から切る (base_source=local, behind=null)', () => {
+  const repo = makeRepo('noremote', 'main');
+  git(repo, ['branch', 'dev']);
+  const localSha = git(repo, ['rev-parse', '--verify', 'dev^{commit}']);
+
+  const r = assignWorktree(cdb, { agentId: 'issue8-noremote', repoPath: repo });
+
+  assert.equal(r.base_source, 'local', 'remote 無しはローカルから切る');
+  assert.equal(r.base_ref_used, 'dev');
+  assert.equal(r.behind, null, 'remote 無しは behind=null');
+
+  const row = cdb.db
+    .prepare(`SELECT base_sha FROM worktree_assignments WHERE agent_id = ? AND status = 'active'`)
+    .get('issue8-noremote') as { base_sha: string | null };
+  assert.equal(row.base_sha, localSha, 'base_sha はローカル base の SHA（現状挙動維持）');
+
+  git(repo, ['worktree', 'remove', '--force', r.worktree_path]);
+});
+
+test('assign (Issue #8): base_ref を明示したときは remote fetch に関係なくその ref から切る (follow-up 後方互換)', () => {
+  const repo = makeRepo('explicit', 'main');
+  setupLaggingRemote(repo, 'explicit');
+  // 明示的な統合ブランチ相当の ref を用意（現在の dev=ローカルの遅れた状態から branch を切る）。
+  git(repo, ['branch', 'integration']);
+  const integrationSha = git(repo, ['rev-parse', '--verify', 'integration^{commit}']);
+
+  const r = assignWorktree(cdb, {
+    agentId: 'issue8-explicit',
+    repoPath: repo,
+    baseRef: 'integration',
+  });
+
+  // base_ref 明示時はリモート追従を行わずその ref をそのまま使う。
+  assert.equal(r.base_source, 'local');
+  assert.equal(r.base_ref_used, 'integration');
+
+  const wtHead = git(r.worktree_path, ['rev-parse', 'HEAD']);
+  assert.equal(wtHead, integrationSha, 'worktree の HEAD は明示 ref の SHA');
+  const row = cdb.db
+    .prepare(`SELECT base_sha FROM worktree_assignments WHERE agent_id = ? AND status = 'active'`)
+    .get('issue8-explicit') as { base_sha: string | null };
+  assert.equal(row.base_sha, integrationSha, 'base_sha は明示 ref の SHA');
+
+  git(repo, ['worktree', 'remove', '--force', r.worktree_path]);
+});
+
+test('assign (Issue #8): base_from_remote=false のときはリモートがあってもローカルから切る', () => {
+  const repo = makeRepo('optoff', 'main');
+  const remoteSha = setupLaggingRemote(repo, 'optoff');
+  const localSha = git(repo, ['rev-parse', '--verify', 'dev^{commit}']);
+  assert.notEqual(localSha, remoteSha, '前提: ローカル dev と origin/dev が異なる');
+
+  const r = assignWorktree(cdb, {
+    agentId: 'issue8-optoff',
+    repoPath: repo,
+    baseFromRemote: false,
+  });
+
+  assert.equal(r.base_source, 'local', 'base_from_remote=false はローカルから切る');
+  assert.equal(r.base_ref_used, 'dev');
+
+  const row = cdb.db
+    .prepare(`SELECT base_sha FROM worktree_assignments WHERE agent_id = ? AND status = 'active'`)
+    .get('issue8-optoff') as { base_sha: string | null };
+  assert.equal(row.base_sha, localSha, 'base_from_remote=false は古いローカル SHA を使う（従来挙動）');
+
+  git(repo, ['worktree', 'remove', '--force', r.worktree_path]);
+});
