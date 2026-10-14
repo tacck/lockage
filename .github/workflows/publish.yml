@@ -1,0 +1,133 @@
+name: publish
+
+# Triggered when a dev -> main PR is merged (push to main). Also runnable
+# manually from the Actions tab (e.g. to retry a failed publish).
+#
+# Authentication uses npm Trusted Publishing (OIDC): no NPM_TOKEN secret is
+# stored. GitHub Actions mints a short-lived OIDC token that npm exchanges for
+# a one-off publish credential, and provenance is attached automatically for a
+# public repo + public package. This requires a Trusted Publisher to be
+# configured on npmjs.com (see docs/branch-strategy.md).
+#
+# The job is guarded so it only publishes when package.json's version is NOT
+# already on npm: a merge that did not bump the version succeeds as a no-op.
+# See docs/branch-strategy.md and docs/releasing.md for the overall flow.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  # id-token: write is REQUIRED for Trusted Publishing — it lets the workflow
+  # mint the OIDC token npm exchanges for a publish credential. Without it,
+  # npm publish fails with ENEEDAUTH.
+  id-token: write
+  # contents: write so the default GITHUB_TOKEN can push the v<version> tag.
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Trusted Publishing requires Node >= 22.14 and npm >= 11.5.1.
+          # Pin to a 22.x that satisfies this; npm is upgraded explicitly below.
+          node-version: '22.14'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing needs npm >= 11.5.1. The npm bundled with Node 22.x
+      # is older, so upgrade it before publishing.
+      - name: Upgrade npm for Trusted Publishing
+        run: npm install -g npm@latest
+
+      # Read the local version once and expose it to later steps.
+      - name: Read local version
+        id: local
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Local package.json version: ${version}"
+
+      # Fail-closed gate mirroring test/plugins.test.ts: the three version
+      # files must be identical before we even consider publishing.
+      - name: Verify version files are in sync
+        env:
+          VERSION: ${{ steps.local.outputs.version }}
+        run: |
+          pkg="$VERSION"
+          claude="$(node -p "require('./plugins/claude/.claude-plugin/plugin.json').version")"
+          antigravity="$(node -p "require('./plugins/antigravity/plugin.json').version")"
+          echo "package.json:              ${pkg}"
+          echo "claude plugin.json:        ${claude}"
+          echo "antigravity plugin.json:   ${antigravity}"
+          if [ "$pkg" != "$claude" ] || [ "$pkg" != "$antigravity" ]; then
+            echo "::error::Version files diverge. All three must equal '${pkg}' (see test/plugins.test.ts)."
+            exit 1
+          fi
+
+      # Decide whether this exact version is already published. We distinguish
+      # three outcomes so a transient npm/network failure does NOT masquerade as
+      # "unpublished" (which would push us toward an unnecessary publish attempt):
+      #   - npm reports a version  -> already published  -> skip (no-op success)
+      #   - npm reports E404       -> not published yet   -> publish
+      #   - any other npm failure  -> treat as fatal and stop
+      - name: Check if version is already published
+        id: check
+        env:
+          VERSION: ${{ steps.local.outputs.version }}
+        run: |
+          set +e
+          out="$(npm view "lockage@${VERSION}" version 2>view_err.txt)"
+          status=$?
+          err="$(cat view_err.txt)"
+          set -e
+          if [ "$status" -eq 0 ] && [ -n "$out" ]; then
+            echo "lockage@${VERSION} is already on npm (${out}); nothing to publish."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          elif printf '%s' "$err" | grep -q 'E404'; then
+            echo "lockage@${VERSION} is not on npm yet; will publish."
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Could not determine publish state for lockage@${VERSION} (npm exit ${status})."
+            printf '%s\n' "$err" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.should_publish == 'true'
+        run: npm ci
+
+      - name: Test
+        if: steps.check.outputs.should_publish == 'true'
+        run: npm test
+
+      # No NODE_AUTH_TOKEN here on purpose: with Trusted Publishing the npm CLI
+      # detects the OIDC environment and authenticates itself. Setting
+      # NODE_AUTH_TOKEN (even empty) makes npm think a token flow is configured
+      # and skip the OIDC exchange, causing ENEEDAUTH. prepublishOnly rebuilds
+      # dist/ so the artifact matches source; provenance is attached automatically.
+      - name: Publish to npm (Trusted Publishing / OIDC)
+        if: steps.check.outputs.should_publish == 'true'
+        run: npm publish
+
+      # Tag the published version (match existing style, e.g. v0.9.3). Skip
+      # without failing if the tag already exists (e.g. a manual re-run).
+      - name: Tag the release
+        if: steps.check.outputs.should_publish == 'true'
+        env:
+          VERSION: ${{ steps.local.outputs.version }}
+        run: |
+          tag="v${VERSION}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists; skipping."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$tag"
+          git push origin "$tag"
