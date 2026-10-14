@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LockageClient } from './client.js';
 import { PublishNoDiffError, type PublishAdapter } from './publish-adapter.js';
+import { isTerminalTaskStatus } from '../lockage/task-status.js';
 // The board is a cumulative log (reconciled rows remain too), so at the default limit=100 (seq
 // ascending = the oldest 100) the latest ticket_ready falls out of the window in proportion to
 // operation time. The publisher reads the same reference range (all) as the observation tool
@@ -527,7 +528,10 @@ export async function reconcileMergedPrs(
         | TaskView2[]
         | { tasks: TaskView2[] };
       const tasks = Array.isArray(tasksRes) ? tasksRes : (tasksRes.tasks ?? []);
-      if (tasks.some((t) => t.status !== 'done')) {
+      // Issue #7: abandoned は終端状態（これ以上作業しない）なので未完了に数えない。
+      // 終端状態（'done','abandoned'）でないタスクが残っている場合のみ B-loss ガードで skip する。
+      // 判定は task-status.ts の共通ヘルパーを使う（TaskView2.status は string 型）。
+      if (tasks.some((t) => !isTerminalTaskStatus(t.status))) {
         outcomes.push({ ticketId, prNumber, result: 'skipped_unmerged_tasks' });
         continue;
       }

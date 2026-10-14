@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDb, type CoordDb } from '../src/db/index.js';
-import { createTask, claimTask, getTask } from '../src/lockage/claim.js';
+import { createTask, claimTask, getTask, releaseTask } from '../src/lockage/claim.js';
 import { assignWorktree } from '../src/lockage/worktree.js';
 import { publishDirty, claimFiles, listClaims } from '../src/lockage/files.js';
 import { openTicket } from '../src/lockage/tickets.js';
@@ -1335,4 +1335,59 @@ test('events.jsonl not generated: even a merge without a task_id does not create
   git(repoPath, ['checkout', '-q', 'main']);
   assert.ok(existsSync(join(repoPath, 'ev-null.txt')), 'merged into the mainline');
   assertNoEventsFile('no task_id');
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Issue #7 回帰テスト: チケットに done と abandoned のタスクしか残っていない場合に ticket_ready が出ること。
+//   abandoned は終端状態なので「未完了」に数えてはならない。従来は tryEmitTicketReady が
+//   `status != 'done'` だけで判定していたため、abandoned のタスクがあると ticket_ready が出なかった。
+// ───────────────────────────────────────────────────────────────────────────
+test('ticket_ready: a ticket with only done+abandoned tasks still emits ticket_ready (Issue #7)', () => {
+  const ticket = openTicket(cdb, { title: 'issue-7', repos: ['repo'] });
+
+  // タスク A・B を同じチケットに作る
+  const taskA = createTask(cdb, { repo: 'repo', title: 'task-A', ticketId: ticket.id });
+  const taskB = createTask(cdb, { repo: 'repo', title: 'task-B', ticketId: ticket.id });
+
+  // A を claim して、何もしないうちに abandoned で取り下げる（releaseTask は in_progress が前提）
+  const wa = assignWorktree(cdb, { agentId: 'A', repoPath, taskId: taskA.id });
+  const claimedA = claimTask(cdb, taskA.id, 'A', taskA.version);
+  assert.equal(claimedA.ok, true);
+  const released = releaseTask(cdb, taskA.id, 'A', 'abandoned');
+  assert.equal(released.ok, true);
+  assert.equal(getTask(cdb.db, taskA.id)?.status, 'abandoned');
+  // A を abandoned にした時点では B がまだ未完了なので ticket_ready は出ていない
+  assert.equal(
+    readBoard(cdb, { kind: 'ticket_ready' }).messages.length,
+    0,
+    'abandoned のみでは ticket_ready は出ない',
+  );
+  // worktree を使わないので A の割り当ては破棄してよい（存在だけ確認）
+  assert.ok(wa.worktree_path);
+
+  // B を claim → 成果をコミット → task_done。残りが done+abandoned のみになり ticket_ready が出るはず
+  const wb = assignWorktree(cdb, { agentId: 'B', repoPath, taskId: taskB.id });
+  const claimedB = claimTask(cdb, taskB.id, 'B', taskB.version);
+  assert.equal(claimedB.ok, true);
+  commitInWorktree(wb.worktree_path, 'b.txt', 'from-B\n');
+  publishDirty(cdb, { agentId: 'B', worktreePath: wb.worktree_path, files: ['b.txt'] });
+
+  const rb = onTaskDone(cdb, {
+    agentId: 'B',
+    worktreePath: wb.worktree_path,
+    branch: wb.branch,
+    repo: repoPath,
+    taskId: taskB.id,
+  });
+  assert.ok(rb.ok, 'B の task_done が成功する');
+  assert.equal(getTask(cdb.db, taskB.id)?.status, 'done');
+
+  // done + abandoned のみになったので ticket_ready が 1 件出る（Issue #7 の修正点）
+  const msgs = readBoard(cdb, { kind: 'ticket_ready' }).messages;
+  assert.equal(msgs.length, 1, 'done+abandoned のみで ticket_ready が 1 件出る');
+  assert.equal(
+    msgs[0]?.ref_ticket_id,
+    ticket.id,
+    'ticket_ready の ref_ticket_id が当該チケットである',
+  );
 });
