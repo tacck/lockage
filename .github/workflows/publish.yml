@@ -40,10 +40,13 @@ jobs:
           node-version: '22.14'
           registry-url: 'https://registry.npmjs.org'
 
-      # Trusted Publishing needs npm >= 11.5.1. The npm bundled with Node 22.x
-      # is older, so upgrade it before publishing.
+      # Trusted Publishing needs npm >= 11.5.1, but the npm bundled with Node
+      # 22.x is older (10.x), so upgrade before publishing. Pin to the 11.x line
+      # on purpose: `npm@latest` is 12.x, which requires Node ^22.22.2 and would
+      # fail with EBADENGINE on the Node 22.14 pinned above. npm@11 (currently
+      # 11.21.x) satisfies the 11.5.1 floor and supports Node >= 22.9.0.
       - name: Upgrade npm for Trusted Publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@^11
 
       # Read the local version once and expose it to later steps.
       - name: Read local version
