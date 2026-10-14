@@ -137,49 +137,6 @@ export function assignWorktree(
   const db = cdb.db;
   const now = unixNow();
 
-  // Issue #8: 切り元 ref の決定。
-  // - args.baseRef が明示されていれば従来どおりその ref をそのまま使う（呼び出し側の明示指定を尊重。
-  //   follow-up タスクが base_ref:<integration_branch> を渡すケースを壊さない）。この場合はリモート
-  //   追従を行わない。
-  // - args.baseRef 省略時は resolveBaseBranch でローカル base 名（例 dev）を決め、baseFromRemote が
-  //   無効でない限りリモート追跡 (origin/<base>) への追従を試みる。
-  const baseFromRemote = args.baseFromRemote ?? true;
-  const explicitBaseRef = args.baseRef !== undefined;
-  // 既定の切り元 ref（ローカル base 名、または明示指定された ref）。
-  const localBase = args.baseRef ?? resolveBaseBranch(args.repoPath);
-  // 実際に worktree add と base_sha に使う切り元 ref。初期値はローカル（＝従来挙動）。
-  let baseRef = localBase;
-  let baseSource: 'remote' | 'local' = 'local';
-  let behind: number | null = null;
-
-  // base_ref 省略かつ baseFromRemote 有効のときのみ、リモート追跡からの切り出しを試みる。
-  if (!explicitBaseRef && baseFromRemote) {
-    const remote = resolveRemoteName(args.repoPath);
-    if (remote) {
-      // 本流を checkout しない安全な fetch。失敗しても best-effort で続行する。
-      fetchBase(args.repoPath, remote, localBase);
-      const tracking = remoteTrackingRef(args.repoPath, remote, localBase);
-      if (tracking) {
-        // 追跡 ref が取れたら切り元を origin/<base> に差し替える（base_sha もこれに合う）。
-        baseRef = tracking;
-        baseSource = 'remote';
-        // ローカル base が追跡からどれだけ遅れているかを best-effort で算出し応答に含める。
-        behind = countBehind(args.repoPath, localBase, tracking);
-      }
-      // 追跡 ref が取れない（fetch 失敗・ブランチ未追跡等）場合は切り元をローカルのまま維持する。
-    }
-    // remote が無い場合（リモート無し環境）は従来どおりローカル base から切る。
-  }
-
-  // Best-effort resolve the real existing SHA of the branch point (FEAT-002). Used later to compute the
-  // diff from base (git diff --name-only <base_sha>...HEAD); recorded only at new assignment time. When it
-  // cannot be resolved (ref missing, empty repo, etc.) it is null → base_sha is saved as NULL and the diff
-  // computation falls back to status only when base_sha is absent. On the idempotent-reuse path of an
-  // existing active assignment, base_sha is not overwritten (keep the first branch point).
-  // Issue #8: baseRef がリモート追跡 (origin/<base>) に差し替わっていれば、base_sha も origin/<base> の
-  // SHA になる（古いローカル SHA を記録しない）。
-  const baseSha = resolveRefSha(args.repoPath, baseRef);
-
   // Generate the branch name/path deterministically (avoid collisions). Because it includes the repo name
   // + agent + task slug, only calls with the "same agent, same repo, same task" land on the same path;
   // different repo / different task become different paths. The reuse decision keys on this deterministic
@@ -246,6 +203,54 @@ export function assignWorktree(
       reused: true,
     };
   }
+
+  // Issue #8 (レビュー指摘 1 対応): リモート追従の fetch 判定・切り元 ref の決定・base_sha の算出は、
+  // 上の再利用（reused=true）早期 return より「後」に置く。これにより冪等な再 assign が再利用でヒット
+  // する場合は fetch を一切行わずに return でき、「再利用パスでは fetch しない」という設計意図を満たす。
+  // 新規割り当てのときだけ、以下で fetch → 追跡 ref 確認 → 切り元差し替え → base_sha 算出を行う。
+  //
+  // 切り元 ref の決定方針:
+  // - args.baseRef が明示されていれば従来どおりその ref をそのまま使う（呼び出し側の明示指定を尊重。
+  //   follow-up タスクが base_ref:<integration_branch> を渡すケースを壊さない）。この場合はリモート
+  //   追従を行わない。
+  // - args.baseRef 省略時は resolveBaseBranch でローカル base 名（例 dev）を決め、baseFromRemote が
+  //   無効でない限りリモート追跡 (origin/<base>) への追従を試みる。
+  const baseFromRemote = args.baseFromRemote ?? true;
+  const explicitBaseRef = args.baseRef !== undefined;
+  // 既定の切り元 ref（ローカル base 名、または明示指定された ref）。
+  const localBase = args.baseRef ?? resolveBaseBranch(args.repoPath);
+  // 実際に worktree add と base_sha に使う切り元 ref。初期値はローカル（＝従来挙動）。
+  let baseRef = localBase;
+  let baseSource: 'remote' | 'local' = 'local';
+  let behind: number | null = null;
+
+  // base_ref 省略かつ baseFromRemote 有効のときのみ、リモート追跡からの切り出しを試みる。
+  if (!explicitBaseRef && baseFromRemote) {
+    const remote = resolveRemoteName(args.repoPath);
+    if (remote) {
+      // 本流を checkout しない安全な fetch。失敗しても best-effort で続行する。
+      fetchBase(args.repoPath, remote, localBase);
+      const tracking = remoteTrackingRef(args.repoPath, remote, localBase);
+      if (tracking) {
+        // 追跡 ref が取れたら切り元を origin/<base> に差し替える（base_sha もこれに合う）。
+        baseRef = tracking;
+        baseSource = 'remote';
+        // ローカル base が追跡からどれだけ遅れているかを best-effort で算出し応答に含める。
+        behind = countBehind(args.repoPath, localBase, tracking);
+      }
+      // 追跡 ref が取れない（fetch 失敗・ブランチ未追跡等）場合は切り元をローカルのまま維持する。
+    }
+    // remote が無い場合（リモート無し環境）は従来どおりローカル base から切る。
+  }
+
+  // Best-effort resolve the real existing SHA of the branch point (FEAT-002). Used later to compute the
+  // diff from base (git diff --name-only <base_sha>...HEAD); recorded only at new assignment time. When it
+  // cannot be resolved (ref missing, empty repo, etc.) it is null → base_sha is saved as NULL and the diff
+  // computation falls back to status only when base_sha is absent. On the idempotent-reuse path of an
+  // existing active assignment, base_sha is not overwritten (keep the first branch point).
+  // Issue #8: baseRef がリモート追跡 (origin/<base>) に差し替わっていれば、base_sha も origin/<base> の
+  // SHA になる（古いローカル SHA を記録しない）。worktree add に baseRef が必要なため、物理作成の前に算出する。
+  const baseSha = resolveRefSha(args.repoPath, baseRef);
 
   // 2) Physically create the worktree (if it exists, skip creation and only record).
   //    Pass the original pre-normalization path to git worktree add as-is. normalizePath is used only for
