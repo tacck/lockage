@@ -7,7 +7,7 @@
       "matcher": "fs_write",
       "action": {
         "type": "command",
-        "command": "npx -y lockage hook guard --client kiro"
+        "command": "npx -y lockage@0.9.4 hook guard --client kiro"
       }
     },
     {
@@ -16,7 +16,7 @@
       "matcher": "str_replace",
       "action": {
         "type": "command",
-        "command": "npx -y lockage hook guard --client kiro"
+        "command": "npx -y lockage@0.9.4 hook guard --client kiro"
       }
     }
   ]

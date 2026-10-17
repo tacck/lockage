@@ -26,7 +26,8 @@
     "pretest:e2e": "npm run build",
     "test:e2e": "node --test --import tsx test/e2e.test.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
-    "sync:plugins": "tsx scripts/sync-plugins.ts"
+    "sync:plugins": "tsx scripts/sync-plugins.ts",
+    "sync:versions": "tsx scripts/sync-versions.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

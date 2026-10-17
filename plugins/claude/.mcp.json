@@ -2,7 +2,10 @@
   "mcpServers": {
     "lockage": {
       "command": "npx",
-      "args": ["-y", "lockage"]
+      "args": [
+        "-y",
+        "lockage@0.9.4"
+      ]
     }
   }
 }

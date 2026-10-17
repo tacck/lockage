@@ -6,7 +6,7 @@
       "trigger": "SessionStart",
       "action": {
         "type": "command",
-        "command": "npx -y lockage hook session --client kiro --agents-md \"<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>\""
+        "command": "npx -y lockage@0.9.4 hook session --client kiro --agents-md \"<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>\""
       }
     }
   ]
