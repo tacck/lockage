@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MANIFEST, copies, leftovers, manifestStale, outOfSync, sync } from '../scripts/sync-plugins.ts';
+import { outOfSync as versionsOutOfSync, packageVersion } from '../scripts/sync-versions.ts';
+import { setupKiro } from '../src/hook/setup-kiro.ts';
 
 /**
  * A guard that keeps each plugin under plugins/ in sync with the canonical files in plugins/shared/ and
@@ -71,7 +73,9 @@ test('plugins: the Claude Code plugin bundles the lockage MCP server, launched f
   // env is left out so the server inherits LOCKAGE_DB from Claude Code's environment and all agents share the same ledger.
   const { mcpServers } = JSON.parse(read('plugins/claude/.mcp.json'));
   assert.deepEqual(Object.keys(mcpServers), ['lockage']);
-  assert.deepEqual(mcpServers.lockage, { command: 'npx', args: ['-y', 'lockage'] });
+  // The npx invocation is pinned to package.json's version (supply-chain hardening); build it from
+  // package.json so the assertion never hardcodes a literal and moves in lockstep with the release.
+  assert.deepEqual(mcpServers.lockage, { command: 'npx', args: ['-y', 'lockage@' + packageVersion()] });
   assert.equal(
     'mcpServers' in JSON.parse(read('plugins/claude/.claude-plugin/plugin.json')),
     false,
@@ -84,7 +88,9 @@ test('plugins: the Antigravity plugin bundles the lockage MCP server, launched f
   // env is left out so the server inherits LOCKAGE_DB from Antigravity's environment and all agents share the same ledger.
   const { mcpServers } = JSON.parse(read('plugins/antigravity/mcp_config.json'));
   assert.deepEqual(Object.keys(mcpServers), ['lockage']);
-  assert.deepEqual(mcpServers.lockage, { command: 'npx', args: ['-y', 'lockage'] });
+  // The npx invocation is pinned to package.json's version (supply-chain hardening); build it from
+  // package.json so the assertion never hardcodes a literal and moves in lockstep with the release.
+  assert.deepEqual(mcpServers.lockage, { command: 'npx', args: ['-y', 'lockage@' + packageVersion()] });
   assert.equal(
     'mcpServers' in JSON.parse(read('plugins/antigravity/plugin.json')),
     false,
@@ -93,8 +99,8 @@ test('plugins: the Antigravity plugin bundles the lockage MCP server, launched f
 });
 
 test('plugins: align the version of the Claude Code and Antigravity plugins with the npm package', () => {
-  // The plugins launch the npm package with an unpinned npx, so a version that names different contents
-  // in the plugin and on npm makes a user's report ambiguous.
+  // The plugins launch the npm package via a version-pinned npx (lockage@<version>), so the plugin
+  // version, package.json, and the pin must all name the same contents or a user's report is ambiguous.
   const version = (path: string): string => JSON.parse(read(path)).version;
   const plugin = version('plugins/claude/.claude-plugin/plugin.json');
   assert.equal(version('plugins/antigravity/plugin.json'), plugin);
@@ -102,4 +108,40 @@ test('plugins: align the version of the Claude Code and Antigravity plugins with
   const lock = JSON.parse(read('package-lock.json'));
   assert.equal(lock.version, plugin, 'update package-lock.json too (npm install)');
   assert.equal(lock.packages[''].version, plugin, 'update package-lock.json too (npm install)');
+});
+
+test('plugins: every bundled `npx -y lockage` is pinned to package.json\'s version (fail-closed gate)', () => {
+  // Supply-chain hardening: an unpinned `npx -y lockage` resolves to whatever npm has cached / the
+  // latest published, so a long-lived installed MCP/hook config could silently start running a
+  // different version. Every server-launching occurrence in the 7 static files (3 MCP + 4 hook defs)
+  // must read `lockage@<package.json version>`. We reuse scripts/sync-versions.ts's outOfSync (the same
+  // detector the `npm run sync:versions -- --check` gate uses) so this test and the sync script cannot
+  // drift — mirroring how the plugins copy tests reuse outOfSync/leftovers from sync-plugins.ts above.
+  const stale = versionsOutOfSync();
+  assert.deepEqual(
+    stale,
+    [],
+    `pin with npm run sync:versions (expected lockage@${packageVersion()} in every bundled npx invocation)`,
+  );
+});
+
+test('setup kiro: the generated hook commands embed lockage@<package.json version>', (t) => {
+  // The main install path (lockage setup kiro) generates the hooks at runtime; assert the version it
+  // embeds comes from package.json (never a hardcoded literal). Run the generator against a temp dir
+  // like test/hook-cli.test.ts does — do NOT launch `npx -y lockage` (it would resolve to the worktree's dist/).
+  const base = mkdtempSync(join(tmpdir(), 'lockage-setup-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+
+  const result = setupKiro({ repo: base });
+  assert.equal(result.exitCode, 0);
+
+  const hooksDir = join(base, '.kiro', 'hooks');
+  const guard = JSON.parse(readFileSync(join(hooksDir, 'lockage-guard.json'), 'utf8'));
+  const session = JSON.parse(readFileSync(join(hooksDir, 'lockage-session.json'), 'utf8'));
+
+  const expected = `lockage@${packageVersion()}`;
+  for (const h of guard.hooks) {
+    assert.ok(h.action.command.includes(expected), h.action.command);
+  }
+  assert.ok(session.hooks[0].action.command.includes(expected), session.hooks[0].action.command);
 });

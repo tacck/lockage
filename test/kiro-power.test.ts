@@ -15,7 +15,7 @@ import { buildServer, OPTIONAL_TOOLSETS } from '../src/index.ts';
  * canonical ones is verified in test/plugins.test.ts.
  *
  * In phase 2 the hook decision logic was ported to Node and the hook entry point was unified to
- * `npx -y lockage hook <sub> --client kiro`. So here the hook definition JSON is verified statically
+ * `npx -y lockage@<version> hook <sub> --client kiro`. So here the hook definition JSON is verified statically
  * (whether command is the npx form, the outer schema, matcher). Verification that runs the decision logic
  * on a real machine (the main-tree edit guard, the SessionStart injected text, self-diagnostic) is handled
  * by test/hook-cli.test.ts, which hits the CLI directly.
@@ -30,6 +30,11 @@ const POWER = join(ROOT, 'plugins', 'kiro');
 function read(path: string): string {
   return readFileSync(path, 'utf8');
 }
+
+// The npx invocations are pinned to package.json's version (supply-chain hardening). Build the expected
+// `lockage@<version>` from package.json so the assertions move in lockstep with the release and never
+// hardcode a literal.
+const version = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string }).version;
 
 type KiroHook = { name: string; trigger: string; matcher?: string; action: { type: string; command: string } };
 
@@ -108,7 +113,7 @@ test('Kiro Power: no retired/renamed old tool names or arguments remain', () => 
 });
 
 test('Kiro Power: the guard hook template is an npx-form command with no placeholder', () => {
-  // the hook launches with `npx -y lockage hook guard --client kiro` (the Node port retired run.sh/direct python calls).
+  // the hook launches with `npx -y lockage@<version> hook guard --client kiro` (the Node port retired run.sh/direct python calls).
   // keep the outer schema (version:'v1', each hook's name/trigger/matcher/action.type) in a form Kiro can read.
   const def = hookDef('lockage-guard.json');
   assert.equal(def.version, 'v1');
@@ -119,7 +124,7 @@ test('Kiro Power: the guard hook template is an npx-form command with no placeho
   for (const h of def.hooks) {
     assert.equal(h.trigger, 'PreToolUse');
     assert.equal(h.action.type, 'command');
-    assert.equal(h.action.command, 'npx -y lockage hook guard --client kiro');
+    assert.equal(h.action.command, 'npx -y lockage@' + version + ' hook guard --client kiro');
     // guard does not use AGENTS.md, so it has neither a placeholder nor --agents-md
     assert.ok(!h.action.command.includes('<ABSOLUTE'), h.action.command);
     assert.ok(!h.action.command.includes('--agents-md'), h.action.command);
@@ -140,7 +145,7 @@ test('Kiro Power: the session hook template is the npx form with only the --agen
   assert.equal(session.action.type, 'command');
   assert.equal(
     session.action.command,
-    'npx -y lockage hook session --client kiro --agents-md "<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>"',
+    'npx -y lockage@' + version + ' hook session --client kiro --agents-md "<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>"',
   );
   // no old <ABSOLUTE_PATH_TO_POWER> or run.sh reference remains
   assert.ok(!session.action.command.includes('<ABSOLUTE_PATH_TO_POWER>'), session.action.command);
@@ -152,7 +157,7 @@ test('Kiro Power: the bundled mcp.json is the npx form with no placeholder', () 
   const raw = read(join(POWER, 'mcp.json'));
   const lockage = JSON.parse(raw).mcpServers.lockage;
   assert.equal(lockage.command, 'npx');
-  assert.deepEqual(lockage.args, ['-y', 'lockage']);
+  assert.deepEqual(lockage.args, ['-y', 'lockage@' + version]);
   assert.equal(lockage.disabled, false);
   // no absolute-path etc. placeholder remains (being usable as-is with no replacement is the requirement)
   assert.ok(!raw.includes('<ABSOLUTE'), raw);
