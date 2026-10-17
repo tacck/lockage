@@ -38,6 +38,13 @@ jobs:
         with:
           node-version: '22'
 
+      # Install deps before any step that shells out to a devDependency. The
+      # "Sync pinned npx versions" step runs `npm run sync:versions`, i.e.
+      # `tsx scripts/sync-versions.ts`; tsx is a devDependency, so node_modules
+      # must exist first or the step dies with exit 127 (`tsx: not found`).
+      - name: Install dependencies
+        run: npm ci
+
       # `npm version <level> --no-git-tag-version` updates package.json and
       # package-lock.json without committing or tagging.
       - name: Bump version
