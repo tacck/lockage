@@ -42,7 +42,7 @@ hook の判定ロジックは `src/hook/` の TypeScript 実装に移植済み�
 `claude/.claude-plugin/plugin.json` と `antigravity/plugin.json` の `version` を**同じ値に**上げ、`package.json`（と `package-lock.json`）も同じ値にする。
 `test/plugins.test.ts` がこの 3 つが揃っていることを強制する。
 
-揃える理由: プラグインは npm パッケージを**版を固定しない** `npx -y lockage` で起動するので、プラグインの変更はその version を npm に publish して初めて利用者に届く —— publish せずにプラグインの version だけ上げても何も起きない。プラグインの version をパッケージの version に結びつけることで、「このプラグインがどのパッケージ version を前提にするか」が 1 つの番号になり、リリースをまたいで両者が歩調を合わせる。ただしこれは、プラグインの version が**実際に動いている版と一致することを保証しない**。起動が版を固定しないため、`npx` は解決した `lockage` の版（キャッシュにある古い版かもしれないし、lockage リポジトリの中なら作業ツリーの `dist/`）を動かすのであって、`plugin.json` に書かれた版とは限らない。動いているサーバの版を確かめるには、起動時に stderr に出る `[lockage] ready (version=…)` の行を見るか、クライアントの MCP 表示（例: Claude Code の `/mcp`）に出るサーバの version を見る。サーバは MCP ハンドシェイクで `package.json` の version を名乗る。
+揃える理由: プラグインは npm パッケージを**パッケージの version にぴったり固定した** `npx -y lockage@<version>` で起動するので、プラグインの変更はその version を npm に publish して初めて利用者に届く —— publish せずにプラグインの version だけ上げても何も起きない。プラグインの version をパッケージの version に結びつけることで、「このプラグインがどのパッケージ version を前提にするか」が 1 つの番号になり、リリースをまたいで両者が歩調を合わせる。この固定は機械的に歩調を合わせる: `npm run sync:versions` が同梱の静的ファイル中の `lockage@X.Y.Z` のトークンを `package.json` から書き換え、テストのゲート（`test/plugins.test.ts`）がずれていれば落ち、version-bump ワークフローが version を上げるたびに同期を再実行するので、起動は常に `plugin.json` が前提とする版を名指しする。唯一の例外は **lockage リポジトリの中**で、そこでは `npx -y lockage@<version>` が固定した版に関係なく作業ツリーの `dist/` に解決される（カレントのプロジェクト自身のパッケージ名が `lockage` だから）ので、lockage を開発している間は公開物ではなくローカルのビルドが動く。動いているサーバの版を確かめるには、起動時に stderr に出る `[lockage] ready (version=…)` の行を見るか、クライアントの MCP 表示（例: Claude Code の `/mcp`）に出るサーバの version を見る。サーバは MCP ハンドシェイクで `package.json` の version を名乗る。
 
 リリースの手順全体（誰が publish するか、何を確かめるか、タグ付け）と変更の種類ごとの version 更新規則は [`../docs/releasing.md`](../docs/releasing_ja.md) を参照。PR をマージしたら、上げた version を npm に publish する。
 
@@ -122,10 +122,10 @@ claude plugin install lockage@lockage
 - `claude -p` などの非対話実行では、確認に答える人がいないため編集は拒否として扱われうる。
   拒否された編集は記録されないので、その場合は本流ツリーの編集が毎回止まる
   （非対話実行で確認がどう扱われるかは Claude Code の権限設定に依存するので、ヘッドレスのワーカーで使う前に確かめること）。
-- プラグインは lockage MCP サーバの定義を `plugins/claude/.mcp.json` に同梱しており、npm 公開物を `npx -y lockage` で起動する
+- プラグインは lockage MCP サーバの定義を `plugins/claude/.mcp.json` に同梱しており、npm 公開物を `npx -y lockage@<version>` で起動する
   （フックと同じ）。プラグインを入れればサーバも登録されるので、別途 `claude mcp add` する必要はない。
-  バージョンは固定していない。動くのは起動時に npx が解決した lockage の公開物（npx のキャッシュにある版のこともあり、最新とは限らない）で、
-  プラグインの `version` とは連動しない。
+  バージョンはパッケージの version にぴったり固定している（`lockage@X.Y.Z`。`npm run sync:versions` が歩調を合わせる）。
+  だから動くのはその公開版で、npx がたまたま解決した版ではない —— ただし lockage リポジトリの中では npx が固定に関係なく `lockage` を作業ツリーの `dist/` に解決する。
   `/mcp` には `plugin:lockage:lockage` として出て、ツール名は `mcp__plugin_lockage_lockage__*` になる（手で登録したサーバでは `mcp__lockage__*`）。
   自分の `permissions.allow` やフックの `matcher` に lockage のツールを `mcp__lockage__...` で書いているなら、移行時に `mcp__plugin_lockage_lockage__...` へ書き換える
   （同梱の AGENTS.md とスキルは `claim_task` のような素のツール名で書いているので、直す必要はない）。
@@ -258,7 +258,7 @@ MCP サーバも hook も npm 公開物を `npx -y lockage` で起動するの�
      Kiro は `tree/<ブランチ>/<パス>` の形の URL からサブディレクトリを取り込める（ほかのリポジトリの Power で確認。
      登録は `~/.kiro/powers/registries/user-added.json` に `pathInRepo` として残る）。lockage のリポジトリが公開されるまでは
      使えず、公開後も lockage では確かめていない。GitHub から登録した Power は main の最新を取り込む。
-2. **MCP サーバを登録する。** 同梱の `mcp.json`（`command:npx`・`args:["-y","lockage"]`・`disabled:false`）を
+2. **MCP サーバを登録する。** 同梱の `mcp.json`（`command:npx`・`args:["-y","lockage@<version>"]`（パッケージの version にぴったり固定）・`disabled:false`）を
    そのまま Kiro の `mcp.json` 設定へ反映する。**プレースホルダの置換は要らない。** `npx` が npm 公開物を取得して
    起動するので、clone や `npm run build` は MCP サーバの起動には要らない（初回は取得に時間がかかることがある）。
    DB（台帳）は既定 `~/.lockage/lockage.sqlite` が使われる。既定のままでよく、場所を変えたい人だけ `lockage` に

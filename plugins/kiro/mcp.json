@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "lockage"
+        "lockage@0.9.4"
       ],
       "disabled": false
     }

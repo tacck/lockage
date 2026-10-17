@@ -42,7 +42,7 @@ lockage は、原子 claim・依存 DAG・チケット管理・worktree 物理�
 
 ## セットアップ
 
-セットアップはクライアントごとです。使うクライアントの lockage プラグイン / Power を入れてください。各プラグインは **協調ルール**（`AGENTS.md` と lockage-workflow スキル）と **lockage MCP サーバ定義**（`npx -y lockage`）の両方を同梱しているので、1 回のインストールで、複数エージェント協調の 2 つの前提 —— サーバとルール —— が一度にそろいます。clone や `npm run build` は要りません（初回は取得に少し時間がかかることがあります）。
+セットアップはクライアントごとです。使うクライアントの lockage プラグイン / Power を入れてください。各プラグインは **協調ルール**（`AGENTS.md` と lockage-workflow スキル）と **lockage MCP サーバ定義**（`npx -y lockage@<version>`。パッケージの version にぴったり固定）の両方を同梱しているので、1 回のインストールで、複数エージェント協調の 2 つの前提 —— サーバとルール —— が一度にそろいます。clone や `npm run build` は要りません（初回は取得に少し時間がかかることがあります）。
 
 各クライアントのインストール手順の詳細は [`plugins/README_ja.md`](plugins/README_ja.md) を参照してください。MCP サーバ登録の詳細（`LOCKAGE_DB` による台帳の置き場の変更、保守用のツール組、手による登録の後始末）は [`docs/mcp-registration.md`](docs/mcp-registration_ja.md) にまとめています。
 

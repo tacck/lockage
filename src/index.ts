@@ -21,9 +21,8 @@
  * handoff (§4.7) is implemented as handing a blocked task to another worker (handoff_task).
  * agent_id is self-declared by the client (Phase 1 assumes a single host inside the trust boundary).
  */
-import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -81,6 +80,7 @@ import {
   waitForUnblock,
   computePublisherStatus,
 } from './lockage/board.js';
+import { readPackageVersion } from './version.js';
 
 /** Shared helper that returns a tool result as MCP text content (JSON). */
 function ok(data: unknown) {
@@ -154,30 +154,10 @@ export function parseToolsets(value: string | undefined): Set<OptionalToolset> {
 }
 
 /**
- * The version this server reports in the MCP initialize handshake.
- * Read from package.json so it stays in sync with the published package
- * (previously hard-coded to '0.0.1', which gave clients no way to tell the
- * running version — see #3). This file sits directly under src/ (dev via tsx)
- * and under dist/ (built via tsc), so package.json is always one level up.
- * If it cannot be read, fall back to '0.0.0' rather than failing to start.
+ * The version this server reports in the MCP initialize handshake. Read from package.json via
+ * the shared reader in src/version.ts so it stays in sync with the published package (previously
+ * hard-coded to '0.0.1', which gave clients no way to tell the running version — see #3).
  */
-function readPackageVersion(): string {
-  try {
-    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown };
-    if (typeof pkg.version === 'string' && pkg.version.length > 0) return pkg.version;
-  } catch (e) {
-    // Reaching here means the build layout is broken (package.json is expected one level up
-    // from this file in both dev and dist). Warn on stderr rather than silently reporting a
-    // bogus version — the whole point (#3) is that the reported version is trustworthy.
-    // stdout is reserved for JSON-RPC, so write only to stderr.
-    process.stderr.write(
-      `[lockage] warning: could not read version from package.json, falling back to 0.0.0 (${String(e)})\n`,
-    );
-  }
-  return '0.0.0';
-}
-
 const SERVER_VERSION = readPackageVersion();
 
 export function buildServer(

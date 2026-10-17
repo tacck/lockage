@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y lockage hook session --client claude --agents-md \"${CLAUDE_PLUGIN_ROOT}/AGENTS.md\"",
+            "command": "npx -y lockage@0.9.4 hook session --client claude --agents-md \"${CLAUDE_PLUGIN_ROOT}/AGENTS.md\"",
             "timeout": 10
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y lockage hook session --client claude --agents-md \"${CLAUDE_PLUGIN_ROOT}/AGENTS.md\"",
+            "command": "npx -y lockage@0.9.4 hook session --client claude --agents-md \"${CLAUDE_PLUGIN_ROOT}/AGENTS.md\"",
             "timeout": 10
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y lockage hook guard --client claude",
+            "command": "npx -y lockage@0.9.4 hook guard --client claude",
             "timeout": 10
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y lockage hook guard --client claude",
+            "command": "npx -y lockage@0.9.4 hook guard --client claude",
             "timeout": 10
           }
         ]
