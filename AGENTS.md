@@ -7,9 +7,12 @@ itself**. (This is not the lockage end-user coordination rules; those live under
 ## Branch and release workflow
 
 The default branch is **`dev`**; releases happen via a **`dev` -> `main`** PR,
-which publishes to npm. See [`docs/branch-strategy.md`](docs/branch-strategy.md)
-for the authoritative details (everyday flow, the publish and version-bump
-workflows, and the one-time setup).
+which publishes to npm. For everyday work, branch off `dev` into a working
+branch (`feature/...`, `fix/...`, `chore/...`) and open a pull request
+**targeting `dev`** — never commit to `dev` or `main` directly. See
+[`docs/branch-strategy.md`](docs/branch-strategy.md) for the authoritative
+details (everyday flow, the publish and version-bump workflows, and the one-time
+setup).
 
 ## Build and test
 
