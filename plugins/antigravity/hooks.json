@@ -3,7 +3,7 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "npx -y lockage@0.9.4 hook session --client antigravity --agents-md ./AGENTS.md",
+        "command": "npx -y lockage@0.9.5 hook session --client antigravity --agents-md ./AGENTS.md",
         "timeout": 30
       }
     ],
@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y lockage@0.9.4 hook guard --client antigravity --event pre",
+            "command": "npx -y lockage@0.9.5 hook guard --client antigravity --event pre",
             "timeout": 10
           }
         ]
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx -y lockage@0.9.4 hook guard --client antigravity --event post",
+            "command": "npx -y lockage@0.9.5 hook guard --client antigravity --event post",
             "timeout": 10
           }
         ]
