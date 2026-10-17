@@ -32,16 +32,16 @@ The one-time setup — creating `dev`, making it the default branch, and configu
    - checks npm — if `package.json`'s version is already published it finishes as a successful no-op, so a merge without a bump does not fail;
    - otherwise runs `npm ci`, `npm test`, `npm publish` (via Trusted Publishing / OIDC — no token; `prepublishOnly` rebuilds `dist/` so the artifact matches source, and provenance is attached automatically), then creates and pushes a `vX.Y.Z` tag (matching the existing tag style, skipping without failing if the tag already exists).
 
-4. **Verify.** `npm view lockage version` shows the version CI just published. Because the plugins launch the server with an unpinned `npx -y lockage`, a fresh npx run (outside the lockage repository, where it would otherwise use the working tree's `dist/`) will resolve the new version once its cache refreshes:
+4. **Verify.** `npm view lockage version` shows the version CI just published, confirming it is resolvable. The plugins now launch the server with a pinned `npx -y lockage@<version>`, so once this version is published the pinned invocation names exactly it. To fetch and launch it directly, pin to the just-published version (outside the lockage repository, where an unqualified `lockage` would otherwise use the working tree's `dist/`):
 
    ```bash
-   npx -y lockage </dev/null
+   npx -y lockage@<the published version> </dev/null
    # stderr shows: [lockage] ready (version=<the published version>, db=..., toolsets=...)
    ```
 
 ## When to bump the version
 
-The version lives in three files that must stay equal — `package.json`, `plugins/claude/.claude-plugin/plugin.json`, and `plugins/antigravity/plugin.json` — and `test/plugins.test.ts` fails if they diverge. Because the plugins launch the npm package with an unpinned `npx -y lockage`, a plugin change only reaches users once a new version is published to npm. So the bump rule is driven by whether a release is needed, by the kind of change:
+The version lives in three files that must stay equal — `package.json`, `plugins/claude/.claude-plugin/plugin.json`, and `plugins/antigravity/plugin.json` — and `test/plugins.test.ts` fails if they diverge. The plugins launch the npm package with a `npx -y lockage@<version>` pinned to that exact version (kept in lockstep by `npm run sync:versions` and re-synced by the version-bump workflow), so a plugin change only reaches users once a new version is published to npm. So the bump rule is driven by whether a release is needed, by the kind of change:
 
 | Change | Bump the three versions? | Publish to npm? |
 |---|---|---|
@@ -50,4 +50,4 @@ The version lives in three files that must stay equal — `package.json`, `plugi
 | `plugins/README.md` or `plugins/kiro/` only | No | No |
 | docs only (`docs/`, top-level `README*.md`) | No | No |
 
-A `plugins/kiro/` or `plugins/README.md`-only change does not need a bump because Kiro's `POWER.md` format has no version and `plugins/README.md` is not shipped in the npm package. See the "version" section of [`../plugins/README.md`](../plugins/README.md#version) for the plugin-cache reasoning (Claude Code builds a cache per version, so a missed bump may not reach users).
+A `plugins/kiro/` or `plugins/README.md`-only change does not need a bump because Kiro's `POWER.md` format has no version and `plugins/README.md` is not shipped in the npm package. (Kiro's pinned files — `plugins/kiro/mcp.json` and the two `plugins/kiro/hooks/*.json` — do carry a `lockage@X.Y.Z` token, but it is regenerated mechanically by `npm run sync:versions` during the bump, so a kiro-only edit still triggers no bump of its own.) See the "version" section of [`../plugins/README.md`](../plugins/README.md#version) for the plugin-cache reasoning (Claude Code builds a cache per version, so a missed bump may not reach users).

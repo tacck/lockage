@@ -68,6 +68,16 @@ jobs:
             }
           '
 
+      # Pin every server-launching `npx -y lockage` occurrence in the bundled
+      # static plugin files to the new version (`lockage@X.Y.Z`), so a long-lived
+      # installed MCP/hook config launches the exact published version rather than
+      # whatever npx happens to resolve. `npm run sync:versions` rewrites the 7
+      # static files below from package.json's version.
+      # Note: src/hook/setup-kiro.ts embeds the version at RUNTIME (read from
+      # package.json), so no source edit is committed for it.
+      - name: Sync pinned npx versions
+        run: npm run sync:versions
+
       # Guarantee package-lock.json reflects the new version (npm version
       # already updates it; this is a belt-and-braces no-op otherwise).
       - name: Ensure lockfile is in sync
@@ -86,7 +96,14 @@ jobs:
           git checkout -b "$branch"
           git add package.json package-lock.json \
             plugins/claude/.claude-plugin/plugin.json \
-            plugins/antigravity/plugin.json
+            plugins/antigravity/plugin.json \
+            plugins/claude/.mcp.json \
+            plugins/kiro/mcp.json \
+            plugins/antigravity/mcp_config.json \
+            plugins/claude/hooks/hooks.json \
+            plugins/antigravity/hooks.json \
+            plugins/kiro/hooks/lockage-guard.json \
+            plugins/kiro/hooks/lockage-session.json
           git commit -m "chore: bump version to v${VERSION} (${LEVEL})"
           git push origin "$branch"
           gh pr create \
@@ -100,5 +117,14 @@ jobs:
           - \`plugins/claude/.claude-plugin/plugin.json\`
           - \`plugins/antigravity/plugin.json\`
           - \`package-lock.json\` (kept in sync)
+
+          Also re-pinned the \`npx -y lockage\` invocations in the bundled plugin files to \`lockage@${VERSION}\` (via \`npm run sync:versions\`):
+          - \`plugins/claude/.mcp.json\`
+          - \`plugins/kiro/mcp.json\`
+          - \`plugins/antigravity/mcp_config.json\`
+          - \`plugins/claude/hooks/hooks.json\`
+          - \`plugins/antigravity/hooks.json\`
+          - \`plugins/kiro/hooks/lockage-guard.json\`
+          - \`plugins/kiro/hooks/lockage-session.json\`
 
           Merge this into \`dev\`. The release happens later via a \`dev\` -> \`main\` PR, which triggers the publish workflow."

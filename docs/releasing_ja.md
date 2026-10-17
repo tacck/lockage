@@ -32,16 +32,16 @@ publish の認証は、保存した `NPM_TOKEN` ではなく **npm の Trusted P
    - npm を確認する —— `package.json` の version が既に publish 済みなら成功扱いの no-op で終わるので、version を上げずにマージしても失敗しません。
    - そうでなければ `npm ci`、`npm test`、`npm publish`（Trusted Publishing / OIDC 経由。トークン不要。`prepublishOnly` が `dist/` を作り直すので公開物はソースと一致し、provenance も自動で付く）を実行し、`vX.Y.Z` タグ（既存のタグ形式に合わせる。既にあれば失敗せずスキップ）を作成して push します。
 
-4. **確認する。** `npm view lockage version` に、CI がいま publish した version が出ます。プラグインは版を固定しない `npx -y lockage` でサーバを起動するので、npx を新規に走らせれば（lockage リポジトリの外で。中だと作業ツリーの `dist/` が使われます）、キャッシュが更新され次第、新しい版が解決されます。
+4. **確認する。** `npm view lockage version` に、CI がいま publish した version が出て、解決できることが確かめられます。プラグインはサーバを、固定した `npx -y lockage@<version>` で起動するようになったので、この版を publish すれば、固定した呼び出しはまさにその版を名指しします。直接取得して起動するには、いま publish した版に固定します（lockage リポジトリの外で。中だと版を付けない `lockage` は作業ツリーの `dist/` が使われます）。
 
    ```bash
-   npx -y lockage </dev/null
+   npx -y lockage@<publish した版> </dev/null
    # stderr に: [lockage] ready (version=<publish した版>, db=..., toolsets=...)
    ```
 
 ## いつ version を上げるか
 
-version は等しく保つべき 3 ファイル —— `package.json`、`plugins/claude/.claude-plugin/plugin.json`、`plugins/antigravity/plugin.json` —— にあり、ずれると `test/plugins.test.ts` が落ちます。プラグインは版を固定しない `npx -y lockage` で npm パッケージを起動するので、プラグインの変更は npm に新しい版を publish して初めて利用者に届きます。したがって version を上げる規則は、変更の種類によって「リリースが要るか」で決まります。
+version は等しく保つべき 3 ファイル —— `package.json`、`plugins/claude/.claude-plugin/plugin.json`、`plugins/antigravity/plugin.json` —— にあり、ずれると `test/plugins.test.ts` が落ちます。プラグインはその版にぴったり固定した `npx -y lockage@<version>` で npm パッケージを起動します（`npm run sync:versions` が歩調を合わせ、version-bump ワークフローが再同期します）ので、プラグインの変更は npm に新しい版を publish して初めて利用者に届きます。したがって version を上げる規則は、変更の種類によって「リリースが要るか」で決まります。
 
 | 変更 | 3 つの version を上げる？ | npm に publish する？ |
 |---|---|---|
@@ -50,4 +50,4 @@ version は等しく保つべき 3 ファイル —— `package.json`、`plugins
 | `plugins/README.md` または `plugins/kiro/` のみ | いいえ | いいえ |
 | ドキュメントのみ（`docs/`、トップの `README*.md`） | いいえ | いいえ |
 
-`plugins/kiro/` や `plugins/README.md` のみの変更で上げなくてよいのは、Kiro の `POWER.md` 形式には version が無く、`plugins/README.md` は npm パッケージに含まれないためです。プラグインキャッシュまわりの理由（Claude Code は版ごとにキャッシュを作るので、上げ忘れると利用者に届かないことがある）は [`../plugins/README.md`](../plugins/README_ja.md#version) の「version」節を参照してください。
+`plugins/kiro/` や `plugins/README.md` のみの変更で上げなくてよいのは、Kiro の `POWER.md` 形式には version が無く、`plugins/README.md` は npm パッケージに含まれないためです。（Kiro の固定ファイル —— `plugins/kiro/mcp.json` と 2 つの `plugins/kiro/hooks/*.json` —— には `lockage@X.Y.Z` のトークンがありますが、これは version を上げるときに `npm run sync:versions` が機械的に再生成するので、kiro だけの変更がそれ自体で version 上げを要することはありません。）プラグインキャッシュまわりの理由（Claude Code は版ごとにキャッシュを作るので、上げ忘れると利用者に届かないことがある）は [`../plugins/README.md`](../plugins/README_ja.md#version) の「version」節を参照してください。

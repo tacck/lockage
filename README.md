@@ -42,7 +42,7 @@ lockage is an MCP server that provides atomic claim, dependency DAG, ticket mana
 
 ## Setup
 
-Setup is per client: install the lockage plugin / Power for the client you use. Each plugin bundles both the **coordination rules** (`AGENTS.md` and the lockage-workflow skill) and the **lockage MCP server definition** (`npx -y lockage`), so a single install lines up the two prerequisites for multi-agent coordination — the server and the rules — in one step. No clone or `npm run build` is needed (the first run may take a little time to fetch).
+Setup is per client: install the lockage plugin / Power for the client you use. Each plugin bundles both the **coordination rules** (`AGENTS.md` and the lockage-workflow skill) and the **lockage MCP server definition** (`npx -y lockage@<version>`, pinned to the exact package version), so a single install lines up the two prerequisites for multi-agent coordination — the server and the rules — in one step. No clone or `npm run build` is needed (the first run may take a little time to fetch).
 
 For the detailed install procedure of each client, see [`plugins/README.md`](plugins/README.md). The MCP server registration details (changing the ledger location via `LOCKAGE_DB`, the maintenance tool set, removing a hand registration) are collected in [`docs/mcp-registration.md`](docs/mcp-registration.md).
 
