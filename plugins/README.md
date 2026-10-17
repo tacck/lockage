@@ -42,7 +42,7 @@ For a PR that changes the contents of `plugins/claude/` or `plugins/antigravity/
 bump the `version` of `claude/.claude-plugin/plugin.json` and `antigravity/plugin.json` **to the same value**, and bump `package.json` (and `package-lock.json`) to it too.
 `test/plugins.test.ts` enforces that these three stay equal.
 
-Why keep them equal: the plugins launch the npm package with an **unpinned** `npx -y lockage`, so a plugin change reaches users only once that version is published to npm — bumping the plugin version without publishing the package does nothing. Tying the plugin version to the package version makes "which package version does this plugin expect" a single number, and keeps the two in step across a release. Note this does **not** guarantee the plugin version equals the version actually running: because the launch is unpinned, `npx` runs whatever `lockage` version it has resolved (which may be a cached older version, or — inside the lockage repository — the working tree's `dist/`), not necessarily the one named in `plugin.json`. To see the version a server is actually running, check the `[lockage] ready (version=…)` line it writes to stderr at startup, or the version shown for the server in the client's MCP view (e.g. Claude Code's `/mcp`); the server reports its `package.json` version in the MCP handshake.
+Why keep them equal: the plugins launch the npm package with a `npx -y lockage@<version>` **pinned to the exact package version**, so a plugin change reaches users only once that version is published to npm — bumping the plugin version without publishing the package does nothing. Tying the plugin version to the package version makes "which package version does this plugin expect" a single number, and keeps the two in step across a release. The pin is kept in lockstep mechanically: `npm run sync:versions` rewrites the `lockage@X.Y.Z` token in the bundled static files from `package.json`, a test gate (`test/plugins.test.ts`) fails if any drifts, and the version-bump workflow re-runs the sync on every bump, so the launch always names the version `plugin.json` expects. The one exception is **inside the lockage repository itself**: there `npx -y lockage@<version>` resolves to the working tree's `dist/` regardless of the pinned version (the current project's own package is named `lockage`), so while developing lockage you run your local build, not the published artifact. To see the version a server is actually running, check the `[lockage] ready (version=…)` line it writes to stderr at startup, or the version shown for the server in the client's MCP view (e.g. Claude Code's `/mcp`); the server reports its `package.json` version in the MCP handshake.
 
 For the full release procedure (who publishes, what to check, tagging) and the bump rule by kind of change, see [`../docs/releasing.md`](../docs/releasing.md). Publish the bumped version to npm when the PR is merged.
 
@@ -120,10 +120,10 @@ While private, only people with git-clone authentication can register.
 - In non-interactive runs such as `claude -p`, since there is no one to answer the confirmation, the edit may be treated as rejected.
   A rejected edit is not recorded, so in that case the main-tree edit is stopped every time
   (how a confirmation is handled in a non-interactive run depends on Claude Code's permission settings, so confirm before using it in a headless worker).
-- The plugin bundles the lockage MCP server definition in `plugins/claude/.mcp.json`, which launches the npm-published artifact with `npx -y lockage`
+- The plugin bundles the lockage MCP server definition in `plugins/claude/.mcp.json`, which launches the npm-published artifact with `npx -y lockage@<version>`
   (the same as the hooks). Installing the plugin registers the server, so no separate `claude mcp add` is needed.
-  The version is not pinned: the server is whichever published lockage npx resolves at launch (which can be a version already in the npx cache,
-  not necessarily the latest), not one tied to the plugin's `version`.
+  The version is pinned to the exact package version (`lockage@X.Y.Z`, kept in lockstep by `npm run sync:versions`), so the server is that published
+  version, not whichever one npx happens to resolve — except inside the lockage repository, where npx resolves `lockage` to the working tree's `dist/` regardless.
   In `/mcp` it shows as `plugin:lockage:lockage`, and its tools are named `mcp__plugin_lockage_lockage__*` (a hand-registered server's are `mcp__lockage__*`).
   If your own `permissions.allow` or hook `matcher` names lockage tools as `mcp__lockage__...`, rewrite them to `mcp__plugin_lockage_lockage__...` when you switch
   (the bundled AGENTS.md and skill refer to tools by their bare names such as `claim_task`, so they need no change).
@@ -256,7 +256,7 @@ Since both the MCP server and the hook launch the npm-published artifact with `n
      Kiro can take in a subdirectory from a URL of the form `tree/<branch>/<path>` (confirmed with another repository's Power.
      The registration remains as `pathInRepo` in `~/.kiro/powers/registries/user-added.json`). It cannot be used until the lockage repository is published,
      and even after publication it has not been confirmed with lockage. A Power registered from GitHub takes in the latest of main.
-2. **Register the MCP server.** Reflect the bundled `mcp.json` (`command:npx`, `args:["-y","lockage"]`, `disabled:false`)
+2. **Register the MCP server.** Reflect the bundled `mcp.json` (`command:npx`, `args:["-y","lockage@<version>"]` pinned to the exact package version, `disabled:false`)
    into Kiro's `mcp.json` configuration as-is. **No placeholder replacement is needed.** Since `npx` fetches and launches the npm-published artifact,
    no clone or `npm run build` is needed to launch the MCP server (the first run may take time to fetch).
    The DB (ledger) uses the default `~/.lockage/lockage.sqlite`. The default is fine; only those who want to change the location add

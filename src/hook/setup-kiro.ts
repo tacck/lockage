@@ -1,7 +1,9 @@
 /**
  * The body of `lockage setup kiro`. Generates lockage-guard.json and lockage-session.json in the
- * target repository's .kiro/hooks/ with npx-form commands (folding in a manual copy + absolute-path
- * substitution).
+ * target repository's .kiro/hooks/ with version-pinned npx-form commands (`npx -y lockage@<version>`;
+ * folding in a manual copy + absolute-path substitution). The commands are pinned to this package's
+ * own version rather than the bare `lockage` so an installed hook keeps invoking the version it was
+ * generated with (supply-chain hardening).
  *
  * design.md §5 is authoritative. The install base is mainRoot ?? toplevel (the main repository root)
  * from running --repo (default cwd) through repoState. If repoState is null (outside git), it is
@@ -16,6 +18,15 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { repoState } from './repo.js';
+import { readPackageVersion } from '../version.js';
+
+// The npx form of the generated hook commands is pinned to this package's own version
+// (lockage@<version>) rather than the bare `lockage` (which would resolve to whatever npm
+// has cached / latest). Pinning guards against a supply-chain surprise where a newer
+// published version silently changes behavior under a long-lived installed hook. The value
+// is read from package.json at runtime, so a release that bumps the version automatically
+// emits hooks pinned to the matching version.
+const version = readPackageVersion();
 
 /** Options for setup kiro. */
 export interface SetupKiroOptions {
@@ -49,7 +60,7 @@ interface KiroHookDef {
 
 /** Build the contents of lockage-guard.json (2 PreToolUse matchers; no --agents-md). */
 function guardDef(): KiroHookDef {
-  const command = 'npx -y lockage hook guard --client kiro';
+  const command = `npx -y lockage@${version} hook guard --client kiro`;
   return {
     version: 'v1',
     hooks: [
@@ -80,7 +91,7 @@ function sessionDef(base: string): KiroHookDef {
         trigger: 'SessionStart',
         action: {
           type: 'command',
-          command: `npx -y lockage hook session --client kiro --agents-md "${agentsMd}"`,
+          command: `npx -y lockage@${version} hook session --client kiro --agents-md "${agentsMd}"`,
         },
       },
     ],

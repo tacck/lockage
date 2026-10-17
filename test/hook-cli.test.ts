@@ -30,6 +30,10 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ENTRY = join(HERE, '..', 'dist', 'index.js'); // hit the built dist
 
+// setup kiro embeds a version-pinned npx command (`npx -y lockage@<version>`). Build the expected
+// version from package.json so the assertions move in lockstep with the release and never hardcode a literal.
+const VERSION = (JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8')) as { version: string }).version;
+
 /** Fix the git environment so it does not depend on the user's global config. */
 const GIT_ENV = {
   ...process.env,
@@ -676,7 +680,7 @@ test('setup kiro: generates lockage-guard.json / lockage-session.json in npx for
     for (const h of guard.hooks) {
       assert.equal(h.trigger, 'PreToolUse');
       assert.equal(h.action.type, 'command');
-      assert.ok(h.action.command.startsWith('npx -y lockage hook guard --client kiro'));
+      assert.ok(h.action.command.startsWith('npx -y lockage@' + VERSION + ' hook guard --client kiro'));
       assert.ok(!h.action.command.includes('--agents-md'));
     }
     const guardNames = guard.hooks.map((h: { name: string }) => h.name).sort();
@@ -688,7 +692,7 @@ test('setup kiro: generates lockage-guard.json / lockage-session.json in npx for
     assert.equal(session.hooks[0].trigger, 'SessionStart');
     assert.equal(session.hooks[0].matcher, undefined);
     assert.equal(session.hooks[0].action.type, 'command');
-    assert.ok(session.hooks[0].action.command.startsWith('npx -y lockage hook session --client kiro'));
+    assert.ok(session.hooks[0].action.command.startsWith('npx -y lockage@' + VERSION + ' hook session --client kiro'));
 
     // no placeholder remains (the absolute path is filled in)
     const bothCommands = JSON.stringify(guard) + JSON.stringify(session);
