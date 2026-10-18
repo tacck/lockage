@@ -76,8 +76,8 @@ import {
   postBoard,
   readBoard,
   readUnread,
-  countUnread,
-  previewUnread,
+  summarizeUnread,
+  getBoardCursor,
   resolveQuestion,
   waitForUnblock,
   computePublisherStatus,
@@ -412,7 +412,7 @@ export function buildServer(
     'heartbeat',
     {
       description:
-        'Signal that you are alive and extend the lease on the tasks and claims you hold (task lease is 15 minutes). Calling claim_task, release_task, claim_files, publish_dirty, resolve_question, assign_worktree, or wait_for_unblock also extends it, but post_board, task_done, release_claim, release_worktree, etc. do not, so call this at intervals shorter than 15 minutes while working (around 10 minutes). Passing task_id extends only that task. It also auto-computes changes (dirty) in your assigned worktree, returning overlaps if they overlap another agent\'s dirty or claims, and files changed outside your claim glob as unclaimed. It also returns unread_count (board posts to you or to everyone that you have not read; your own posts and ticket_ready / pr_* are not counted) and unread_preview (the newest 3: seq, author, kind, body_head, ref_task_id) without marking them read. When unread_count > 0, read them with read_board(agent_id, unread_only:true) at the next break, question and handoff first.',
+        'Signal that you are alive and extend the lease on the tasks and claims you hold (task lease is 15 minutes). Calling claim_task, release_task, claim_files, publish_dirty, resolve_question, assign_worktree, or wait_for_unblock also extends it, but post_board, task_done, release_claim, release_worktree, etc. do not, so call this at intervals shorter than 15 minutes while working (around 10 minutes). Passing task_id extends only that task. It also auto-computes changes (dirty) in your assigned worktree, returning overlaps if they overlap another agent\'s dirty or claims, and files changed outside your claim glob as unclaimed. It also returns unread_count (board posts to you or to everyone that you have not read; your own posts and ticket_ready / pr_* are not counted) and unread_preview (the newest 3: seq, author, kind, body_head, ref_task_id) without marking them read. When unread_count > 0, read them with read_board(agent_id, unread_only:true) at the next break and handle question and handoff first in what it returns.',
       inputSchema: { agent_id: z.string(), task_id: z.string().optional() },
     },
     async (a) => {
@@ -425,8 +425,7 @@ export function buildServer(
         wake_targets: rc.wake_targets,
         unclaimed: rc.unclaimed,
         // Lets a working agent notice posts without waiting; reading them is left to read_board.
-        unread_count: countUnread(cdb, a.agent_id),
-        unread_preview: previewUnread(cdb, a.agent_id),
+        ...summarizeUnread(cdb, a.agent_id),
       });
     },
   );
@@ -697,8 +696,11 @@ export function buildServer(
         ref_ticket_id: z.string().nullable().optional(),
       },
     },
-    async (a) =>
-      ok(
+    async (a) => {
+      // The post that names an agent at startup is often its first call carrying agent_id: start
+      // tracking its unread from here (before the insert, so the agent's own post never counts).
+      getBoardCursor(cdb, a.agent_id);
+      return ok(
         postBoard(cdb, {
           agentId: a.agent_id,
           body: a.body,
@@ -707,14 +709,15 @@ export function buildServer(
           refTaskId: a.ref_task_id ?? null,
           refTicketId: a.ref_ticket_id ?? null,
         }),
-      ),
+      );
+    },
   );
 
   server.registerTool(
     'read_board',
     {
       description:
-        'Read the board. Passing the last-read seq as since returns only the diff. Passing to_agent returns posts addressed to you and to everyone. Filter by kind (ticket_ready = tickets ready to become a PR; pr_opened, pr_updated, pr_merged = records from lockage-publish). unresolved_only=true excludes resolved questions (kinds other than question are still returned, so combine with kind="question" to see only unresolved questions). unread_only=true with agent_id returns only your unread posts (to you or to everyone, from where you last read; your own posts and ticket_ready / pr_* excluded) and marks them read; it cannot be combined with since / to_agent / kind / unresolved_only.',
+        'Read the board. Passing the last-read seq as since returns only the diff. Passing to_agent returns posts addressed to you and to everyone. Filter by kind (ticket_ready = tickets ready to become a PR; pr_opened, pr_updated, pr_merged = records from lockage-publish). unresolved_only=true excludes resolved questions (kinds other than question are still returned, so combine with kind="question" to see only unresolved questions). unread_only=true with agent_id returns only your unread posts (to you or to everyone, from where you last read; your own posts and ticket_ready / pr_* excluded; at most 100 unless limit is given) and marks them read; it cannot be combined with since / to_agent / kind / unresolved_only.',
       inputSchema: {
         agent_id: z.string().optional().describe('required with unread_only'),
         unread_only: z.boolean().optional(),
@@ -736,6 +739,8 @@ export function buildServer(
         }
         return ok(readUnread(cdb, a.agent_id, { limit: a.limit }));
       }
+      // Reading "posts to me" identifies the caller: start tracking its unread from here.
+      if (a.to_agent) getBoardCursor(cdb, a.to_agent);
       return ok(
         readBoard(cdb, {
           since: a.since,
@@ -976,7 +981,7 @@ export function buildServer(
     'wait_for_unblock',
     {
       description:
-        'Wait once until one of the following happens: a task you are waiting on becomes ready; an unread board post addressed to you or to everyone; an overlap with another agent; or timeout. Returns what woke you via woke_by. Unread is counted from where you last read, so a post that arrived while you were working or between waits still wakes you; the returned posts are then marked read. Posts addressed to you count from the start even before your first call (e.g. a handoff_task to you before you launched), posts to everyone from your first call. Your own posts and ticket_ready / pr_opened / pr_updated / pr_merged do not wake you (read_board still returns them). Use it instead of repeatedly polling lists.',
+        'Wait once until one of the following happens: a task you are waiting on becomes ready; an unread board post addressed to you or to everyone; an overlap with another agent; or timeout. Returns what woke you via woke_by. Unread is counted from where you last read, so a post that arrived while you were working or between waits still wakes you; the returned posts are then marked read. Posts addressed to you count from the start even before your first call (e.g. a handoff_task to you before you launched), posts to everyone from your first lockage call with your agent_id (e.g. the post_board that names you). At most 100 posts per call; the rest wake the next call. Your own posts and ticket_ready / pr_opened / pr_updated / pr_merged do not wake you (read_board still returns them). Use it instead of repeatedly polling lists.',
       inputSchema: {
         agent_id: z.string(),
         task_id: z.string().optional().describe('the task whose dependency resolution you are waiting for'),

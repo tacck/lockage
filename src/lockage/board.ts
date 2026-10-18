@@ -1,5 +1,7 @@
 import { ulid } from 'ulid';
+import type { DatabaseSync } from 'node:sqlite';
 import { unixNow, type CoordDb } from '../db/index.js';
+import { ensureBoardCursor, type BoardCursor } from './board-cursor.js';
 import { sweepExpired } from './claim.js';
 
 /**
@@ -452,32 +454,20 @@ export const SYSTEM_BOARD_KINDS: ReadonlyArray<BoardMessage['kind']> = [
   'pr_merged',
 ];
 
-/** An agent's board read position (board_cursors). */
-export interface BoardCursor {
-  directed_seq: number;
-  broadcast_seq: number;
+export type { BoardCursor };
+
+/** Read an agent's read position, creating it on first sight (see ensureBoardCursor). */
+export function getBoardCursor(cdb: CoordDb, agentId: string): BoardCursor {
+  return ensureBoardCursor(cdb.db, agentId);
 }
 
 /**
- * Read an agent's read position, creating it on first sight. A new agent starts directed at 0 (so a
- * post addressed to it before it started, e.g. a handoff_task to a not-yet-launched worker, is still
- * unread) and broadcast at the current MAX(seq) (so past posts to everyone do not flood in).
- * INSERT OR IGNORE keeps concurrent first sights from overwriting each other.
+ * The most unread posts one wait_for_unblock or read_board(unread_only) returns. The rest stay
+ * unread and come back on the next call.
  */
-export function getBoardCursor(cdb: CoordDb, agentId: string): BoardCursor {
-  cdb.db
-    .prepare(
-      `INSERT OR IGNORE INTO board_cursors (agent_id, directed_seq, broadcast_seq, updated_at)
-       VALUES (?, 0, (SELECT COALESCE(MAX(seq), 0) FROM board_messages), ?)`,
-    )
-    .run(agentId, unixNow());
-  const row = cdb.db
-    .prepare(`SELECT directed_seq, broadcast_seq FROM board_cursors WHERE agent_id = ?`)
-    .get(agentId) as unknown as BoardCursor;
-  return { directed_seq: row.directed_seq, broadcast_seq: row.broadcast_seq };
-}
+export const UNREAD_RETURN_LIMIT = 100;
 
-/** The WHERE clause and params shared by listUnread / countUnread. */
+/** The WHERE clause and params for an agent's unread posts. */
 function unreadWhere(cursor: BoardCursor, agentId: string): { sql: string; params: unknown[] } {
   const kinds = SYSTEM_BOARD_KINDS.map(() => '?').join(', ');
   return {
@@ -487,16 +477,30 @@ function unreadWhere(cursor: BoardCursor, agentId: string): { sql: string; param
   };
 }
 
+function selectUnread(
+  db: DatabaseSync,
+  cursor: BoardCursor,
+  agentId: string,
+  limit: number,
+): BoardMessage[] {
+  const w = unreadWhere(cursor, agentId);
+  return db
+    .prepare(`SELECT * FROM board_messages WHERE ${w.sql} ORDER BY seq ASC LIMIT ?`)
+    .all(...(w.params as never[]), limit) as unknown as BoardMessage[];
+}
+
 /** An agent's unread posts in seq ascending order (does not advance the read position). */
 export function listUnread(
   cdb: CoordDb,
   agentId: string,
   opts: { limit?: number } = {},
 ): BoardMessage[] {
-  const w = unreadWhere(getBoardCursor(cdb, agentId), agentId);
-  return cdb.db
-    .prepare(`SELECT * FROM board_messages WHERE ${w.sql} ORDER BY seq ASC LIMIT ?`)
-    .all(...(w.params as never[]), opts.limit ?? BOARD_READ_ALL_LIMIT) as unknown as BoardMessage[];
+  return selectUnread(
+    cdb.db,
+    getBoardCursor(cdb, agentId),
+    agentId,
+    opts.limit ?? UNREAD_RETURN_LIMIT,
+  );
 }
 
 /** The number of an agent's unread posts (does not advance the read position). */
@@ -521,22 +525,97 @@ export interface UnreadPreview {
 const PREVIEW_BODY_CHARS = 80;
 
 /**
- * The newest `n` unread posts (seq ascending) as short previews, for heartbeat. Does not advance the
- * read position: the agent reads the posts themselves with read_board(unread_only).
+ * heartbeat's unread report: the count and the newest `n` unread posts (seq ascending) as short
+ * previews. Both come from one read position inside one read transaction, so a post arriving in
+ * between cannot make them disagree. Does not advance the read position: the agent reads the posts
+ * themselves with read_board(unread_only).
  */
-export function previewUnread(cdb: CoordDb, agentId: string, n = 3): UnreadPreview[] {
-  const w = unreadWhere(getBoardCursor(cdb, agentId), agentId);
-  const rows = cdb.db
-    .prepare(`SELECT * FROM board_messages WHERE ${w.sql} ORDER BY seq DESC LIMIT ?`)
-    .all(...(w.params as never[]), n) as unknown as BoardMessage[];
-  return rows.reverse().map((m) => ({
-    seq: m.seq,
-    author: m.author,
-    kind: m.kind,
-    body_head:
-      m.body.length > PREVIEW_BODY_CHARS ? `${m.body.slice(0, PREVIEW_BODY_CHARS)}…` : m.body,
-    ref_task_id: m.ref_task_id,
-  }));
+export function summarizeUnread(
+  cdb: CoordDb,
+  agentId: string,
+  n = 3,
+): { unread_count: number; unread_preview: UnreadPreview[] } {
+  const db = cdb.db;
+  const cursor = getBoardCursor(cdb, agentId);
+  const w = unreadWhere(cursor, agentId);
+  db.exec('BEGIN');
+  try {
+    const count = db
+      .prepare(`SELECT COUNT(*) AS n FROM board_messages WHERE ${w.sql}`)
+      .get(...(w.params as never[])) as { n: number };
+    const rows = db
+      .prepare(`SELECT * FROM board_messages WHERE ${w.sql} ORDER BY seq DESC LIMIT ?`)
+      .all(...(w.params as never[]), n) as unknown as BoardMessage[];
+    db.exec('COMMIT');
+    return {
+      unread_count: count.n,
+      unread_preview: rows.reverse().map((m) => ({
+        seq: m.seq,
+        author: m.author,
+        kind: m.kind,
+        body_head:
+          m.body.length > PREVIEW_BODY_CHARS ? `${m.body.slice(0, PREVIEW_BODY_CHARS)}…` : m.body,
+        ref_task_id: m.ref_task_id,
+      })),
+    };
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* already closed */
+    }
+    throw e;
+  }
+}
+
+/** Move the read position forward past `messages` (directed and broadcast separately). No transaction. */
+function advanceCursor(db: DatabaseSync, agentId: string, messages: BoardMessage[]): void {
+  let directed = 0;
+  let broadcast = 0;
+  for (const m of messages) {
+    if (m.to_agent === agentId) directed = Math.max(directed, m.seq);
+    else if (m.to_agent === null) broadcast = Math.max(broadcast, m.seq);
+  }
+  if (directed === 0 && broadcast === 0) return;
+  // MAX: only forward, so a stale caller cannot move it back.
+  db.prepare(
+    `UPDATE board_cursors
+        SET directed_seq = MAX(directed_seq, ?), broadcast_seq = MAX(broadcast_seq, ?), updated_at = ?
+      WHERE agent_id = ?`,
+  ).run(directed, broadcast, unixNow(), agentId);
+}
+
+/**
+ * Take an agent's unread posts and mark them read, atomically. Selecting and advancing inside one
+ * BEGIN IMMEDIATE means two concurrent calls for the same agent_id (several processes share the
+ * ledger, and agent_id uniqueness is only a convention) cannot both return the same post.
+ * Used by wait_for_unblock and read_board(unread_only).
+ */
+export function consumeUnread(
+  cdb: CoordDb,
+  agentId: string,
+  opts: { limit?: number } = {},
+): BoardMessage[] {
+  const db = cdb.db;
+  // Create the row outside the write transaction; it is idempotent, and this keeps the
+  // common (row exists) path to a plain SELECT before BEGIN IMMEDIATE.
+  getBoardCursor(cdb, agentId);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    // Re-read the position under the lock: another caller may have advanced it.
+    const cursor = ensureBoardCursor(db, agentId);
+    const messages = selectUnread(db, cursor, agentId, opts.limit ?? UNREAD_RETURN_LIMIT);
+    advanceCursor(db, agentId, messages);
+    db.exec('COMMIT');
+    return messages;
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* already closed */
+    }
+    throw e;
+  }
 }
 
 /** read_board(unread_only): return the agent's unread posts and mark them read. */
@@ -545,33 +624,19 @@ export function readUnread(
   agentId: string,
   opts: { limit?: number } = {},
 ): { messages: BoardMessage[] } {
-  const messages = listUnread(cdb, agentId, { limit: opts.limit ?? 100 });
-  markBoardRead(cdb, agentId, messages);
-  return { messages };
+  return { messages: consumeUnread(cdb, agentId, opts) };
 }
 
 /**
- * Advance an agent's read position past the posts just returned to it, separately for directed and
- * broadcast. Only moves forward (MAX), so a stale caller cannot move it back. Posts not addressed to
- * the agent are ignored.
+ * Advance an agent's read position past the posts given, separately for directed and broadcast.
+ * Only moves forward (MAX). Posts not addressed to the agent are ignored.
  */
 export function markBoardRead(cdb: CoordDb, agentId: string, messages: BoardMessage[]): void {
-  let directed = 0;
-  let broadcast = 0;
-  for (const m of messages) {
-    if (m.to_agent === agentId) directed = Math.max(directed, m.seq);
-    else if (m.to_agent === null) broadcast = Math.max(broadcast, m.seq);
-  }
-  if (directed === 0 && broadcast === 0) return;
   getBoardCursor(cdb, agentId);
   const db = cdb.db;
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare(
-      `UPDATE board_cursors
-          SET directed_seq = MAX(directed_seq, ?), broadcast_seq = MAX(broadcast_seq, ?), updated_at = ?
-        WHERE agent_id = ?`,
-    ).run(directed, broadcast, unixNow(), agentId);
+    advanceCursor(db, agentId, messages);
     db.exec('COMMIT');
   } catch (e) {
     try {
@@ -665,9 +730,6 @@ export interface UnblockResult {
   payload?: unknown;
 }
 
-/** The most unread posts one wait_for_unblock returns; the rest wake the next call. */
-const WAIT_BOARD_LIMIT = 100;
-
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -717,9 +779,8 @@ export async function waitForUnblock(
     //    no longer stacked (handoff / needs_review rely on the post itself), but a DB from before may
     //    still hold some: drain them here so the same notification does not wake twice, and still
     //    honor them below when there is no unread post.
-    const unread = listUnread(cdb, args.agentId, { limit: WAIT_BOARD_LIMIT });
+    const unread = consumeUnread(cdb, args.agentId);
     if (unread.length > 0) {
-      markBoardRead(cdb, args.agentId, unread);
       takePendingWakes(cdb, args.agentId, 'board');
       return { woke_by: 'board', payload: unread };
     }

@@ -238,9 +238,9 @@ MCP ツールとして以下を公開しています。`agent_id` は各エー�
 
 - **待機していなくても未読は残ります。** 作業中や、タイムアウトしてから次の `wait_for_unblock` を呼ぶまでの間に届いた投稿でも、次の呼び出しが起きます。
 - **既読が進むのは投稿を返したときです。** `wait_for_unblock`（`woke_by:"board"`）か `read_board(unread_only)` が投稿を返すと既読になります。`heartbeat` は知らせるだけで、既読にはしません。
-- **新しいエージェントの読み始め:** 自分宛ての投稿は最初から数えます（起動前の worker への `handoff_task` も拾えます）。全員宛ての投稿は最初に呼んだ時点から数えます（過去の投稿は流れ込みません）。
+- **新しいエージェントの読み始め:** 自分宛ての投稿は最初から数えます（起動前の worker への `handoff_task` も拾えます）。全員宛ての投稿は、自分の `agent_id` で初めて lockage を呼んだ時点から数えます（起動時に名乗る `post_board`、`heartbeat`、`read_board(to_agent:<自分>)` など、`agent_id` を渡すツールならどれでも）。過去の投稿は流れ込みません。この機能より前の台帳を上げたときは、台帳がすでに知っているエージェントは宛先付き・全員宛てとも最新の投稿から数えるので、解決済みの古い投稿が未読に戻ることはありません。
 - **未読に数えないもの:** 自分の投稿と、`ticket_ready` / `pr_opened` / `pr_updated` / `pr_merged`（`publisher_status` / `lockage-publish` のための記録）。`unread_only` なしの `read_board` では、これまでどおり読めます。
-- 作業中に `heartbeat` の `unread_count > 0` を見たら、区切りのよいところで `read_board(agent_id, unread_only:true)` で読みます。`question` と `handoff` を優先します。
+- 作業中に `heartbeat` の `unread_count > 0` を見たら、区切りのよいところで `read_board(agent_id, unread_only:true)` で読みます。未読をまとめて `seq` 順に返し（1 回 100 件まで。残りは未読のまま次の呼び出しで返ります）、既読にします。返った一覧の中では `question` と `handoff` を先に処理します。
 
 ---
 
@@ -334,7 +334,7 @@ sequenceDiagram
 
     Note over Agent,Lockage: ⑧ 次へ — 手が空いたら long-poll で待つ
     Agent->>Lockage: wait_for_unblock(agent_id)
-    Lockage-->>Agent: 依存解消 / 自分宛 board / overlap で wake
+    Lockage-->>Agent: 依存解消 / 自分宛か全員宛ての未読 board / overlap で wake
 ```
 
 **要点**:

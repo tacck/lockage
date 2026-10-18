@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { openDb, migrate, unixNow, type CoordDb } from '../src/db/index.js';
-import { createTask, claimTask, releaseTask } from '../src/lockage/claim.js';
+import { createTask, claimTask, releaseTask, heartbeat } from '../src/lockage/claim.js';
 import {
   postBoard,
   readBoard,
@@ -19,8 +21,10 @@ import {
   listUnread,
   countUnread,
   markBoardRead,
-  previewUnread,
+  summarizeUnread,
   readUnread,
+  consumeUnread,
+  UNREAD_RETURN_LIMIT,
   type BoardMessage,
 } from '../src/lockage/board.js';
 import { publishDirty, claimFiles } from '../src/lockage/files.js';
@@ -405,29 +409,49 @@ test('markBoardRead: advances directed and broadcast separately, only forward, a
   );
 });
 
-test('board_cursors: opening an existing DB without the table creates it, and reopening is idempotent', () => {
+test('board_cursors: adding the table to an existing DB starts known agents at the latest seq; later newcomers still start directed at 0', () => {
   const dir = mkdtempSync(join(tmpdir(), 'lockage-cursor-'));
   const path = join(dir, 'db.sqlite');
   try {
     const first = openDb({ path, hostId: 'host-test' });
-    postBoard(first, { agentId: 'B', toAgent: 'A', body: 'kept' });
+    heartbeat(first, 'K'); // K is in agents
+    postBoard(first, { agentId: 'B', toAgent: 'A', kind: 'question', body: 'old, long resolved' });
+    postBoard(first, { agentId: 'B', body: 'old broadcast' });
     first.db.exec('DROP TABLE board_cursors'); // reproduce a DB from before this table
     first.close();
 
     const second = openDb({ path, hostId: 'host-test' });
-    assert.deepEqual(
-      listUnread(second, 'A').map((m) => m.body),
-      ['kept'],
-    );
+    // A (named as to_agent), B (author) and K (agents) are seeded at the latest seq: no old post floods in
+    for (const agent of ['A', 'B', 'K']) {
+      assert.deepEqual(getBoardCursor(second, agent), { directed_seq: 2, broadcast_seq: 2 }, agent);
+      assert.equal(countUnread(second, agent), 0, agent);
+    }
+    // posts after the upgrade are unread as usual; a newcomer N still picks up a post made before it appeared
+    postBoard(second, { agentId: 'B', toAgent: 'A', body: 'new for A' });
+    postBoard(second, { agentId: 'B', toAgent: 'N', kind: 'handoff', body: 'handoff to N' });
+    assert.deepEqual(listUnread(second, 'A').map((m) => m.body), ['new for A']);
+    assert.deepEqual(listUnread(second, 'N').map((m) => m.body), ['handoff to N']);
     markBoardRead(second, 'A', listUnread(second, 'A'));
     second.close();
 
+    // reopening does not seed again (the table exists) and the position survives
     const third = openDb({ path, hostId: 'host-test' });
     assert.equal(countUnread(third, 'A'), 0, 'the read position survives a reopen');
+    assert.equal(countUnread(third, 'N'), 1, 'N is not re-seeded past its unread handoff');
     third.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('heartbeat (own liveness) starts tracking broadcasts; a touchAgent:false heartbeat does not', () => {
+  postBoard(cdb, { agentId: 'B', body: 'before anyone' });
+  heartbeat(cdb, 'A');
+  heartbeat(cdb, 'W', { touchAgent: false }); // e.g. handoff_task to a worker not launched yet
+  postBoard(cdb, { agentId: 'B', body: 'after A appeared' });
+  assert.deepEqual(listUnread(cdb, 'A').map((m) => m.body), ['after A appeared']);
+  const w = cdb.db.prepare(`SELECT 1 FROM board_cursors WHERE agent_id = 'W'`).get();
+  assert.equal(w, undefined, 'W got a read position before it launched');
 });
 
 // ---- wait_for_unblock from the stored read position ----
@@ -504,7 +528,7 @@ test('wait_for_unblock: a leftover board wake alone (old DB) is still honored', 
 
 // ---- heartbeat preview / read_board(unread_only) ----
 
-test('previewUnread: the newest 3 unread as short previews, without advancing the read position', () => {
+test('summarizeUnread: the count and the newest 3 unread as short previews, without advancing the read position', () => {
   getBoardCursor(cdb, 'A');
   const task = createTask(cdb, { repo: 'r', title: 't' });
   for (let i = 1; i <= 4; i++) postBoard(cdb, { agentId: 'B', toAgent: 'A', body: `m${i}` });
@@ -515,7 +539,8 @@ test('previewUnread: the newest 3 unread as short previews, without advancing th
     refTaskId: task.id,
   });
 
-  const p = previewUnread(cdb, 'A');
+  const { unread_count, unread_preview: p } = summarizeUnread(cdb, 'A');
+  assert.equal(unread_count, 5);
   assert.deepEqual(
     p.map((m) => m.seq),
     [3, 4, 5],
@@ -524,7 +549,7 @@ test('previewUnread: the newest 3 unread as short previews, without advancing th
   assert.equal(p[2]?.ref_task_id, task.id);
   assert.equal(p[2]?.body_head, `${'x'.repeat(80)}…`);
   assert.equal(p[0]?.body_head, 'm3');
-  assert.equal(countUnread(cdb, 'A'), 5, 'preview does not mark anything read');
+  assert.equal(countUnread(cdb, 'A'), 5, 'the summary does not mark anything read');
 });
 
 test('readUnread: returns only unread, marks them read, and is empty when called again', () => {
@@ -554,4 +579,82 @@ test('readUnread: limit returns the oldest unread first and leaves the rest unre
     readUnread(cdb, 'A').messages.map((m) => m.body),
     ['m3'],
   );
+});
+
+// ---- consuming unread: paging and concurrency ----
+
+test('consumeUnread: a limit boundary across directed and broadcast leaves the rest unread', () => {
+  getBoardCursor(cdb, 'A');
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd1' }); // seq 1
+  postBoard(cdb, { agentId: 'B', body: 'b1' }); // seq 2
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd2' }); // seq 3
+  postBoard(cdb, { agentId: 'B', body: 'b2' }); // seq 4
+  assert.deepEqual(consumeUnread(cdb, 'A', { limit: 3 }).map((m) => m.body), ['d1', 'b1', 'd2']);
+  assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 3, broadcast_seq: 2 });
+  assert.deepEqual(consumeUnread(cdb, 'A', { limit: 3 }).map((m) => m.body), ['b2']);
+});
+
+test('wait_for_unblock: more unread than the return limit comes back over several calls', async () => {
+  getBoardCursor(cdb, 'A');
+  for (let i = 1; i <= UNREAD_RETURN_LIMIT + 1; i++) {
+    postBoard(cdb, { agentId: 'B', toAgent: 'A', body: `m${i}` });
+  }
+  const first = await waitForUnblock(cdb, { agentId: 'A', timeoutSec: 1, pollMs: 20 });
+  assert.equal((first.payload as BoardMessage[]).length, UNREAD_RETURN_LIMIT);
+  const second = await waitForUnblock(cdb, { agentId: 'A', timeoutSec: 1, pollMs: 20 });
+  assert.deepEqual(
+    (second.payload as BoardMessage[]).map((m) => m.body),
+    [`m${UNREAD_RETURN_LIMIT + 1}`],
+  );
+});
+
+test('wait_for_unblock: waking on a post drains every leftover board wake, whatever its payload', async () => {
+  getBoardCursor(cdb, 'A');
+  wake(cdb, 'A', 'board', { reason: 'handoff', task_id: 't1' });
+  wake(cdb, 'A', 'board', { reason: 'merge_needs_review', task: 't2' });
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'post' });
+  assert.equal((await waitForUnblock(cdb, { agentId: 'A', timeoutSec: 1, pollMs: 20 })).woke_by, 'board');
+  assert.deepEqual(takePendingWakes(cdb, 'A', 'board'), []);
+});
+
+test('consumeUnread: processes consuming the same agent concurrently never get the same post twice', async () => {
+  // Real separate processes on one ledger file, each taking 1 post at a time until none is left.
+  const dir = mkdtempSync(join(tmpdir(), 'lockage-consume-'));
+  const path = join(dir, 'db.sqlite');
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const POSTS = 40;
+  try {
+    const setup = openDb({ path, hostId: 'host-test' });
+    getBoardCursor(setup, 'A');
+    for (let i = 1; i <= POSTS; i++) postBoard(setup, { agentId: 'B', toAgent: 'A', body: `m${i}` });
+    setup.close();
+
+    const script = `
+      const { openDb } = await import(${JSON.stringify(join(root, 'dist/db/index.js'))});
+      const { consumeUnread } = await import(${JSON.stringify(join(root, 'dist/lockage/board.js'))});
+      const cdb = openDb({ path: ${JSON.stringify(path)}, hostId: 'host-test' });
+      const got = [];
+      for (;;) {
+        const m = consumeUnread(cdb, 'A', { limit: 1 });
+        if (m.length === 0) break;
+        got.push(m[0].seq);
+      }
+      cdb.close();
+      process.stdout.write(JSON.stringify(got));
+    `;
+    const run = () =>
+      new Promise<number[]>((resolve, reject) => {
+        const p = spawn(process.execPath, ['--input-type=module', '-e', script]);
+        let out = '';
+        let err = '';
+        p.stdout.on('data', (d) => (out += d));
+        p.stderr.on('data', (d) => (err += d));
+        p.on('close', (code) => (code === 0 ? resolve(JSON.parse(out)) : reject(new Error(err))));
+      });
+    const results = await Promise.all([run(), run(), run(), run()]);
+    const all = results.flat().sort((a, b) => a - b);
+    assert.deepEqual(all, Array.from({ length: POSTS }, (_, i) => i + 1), 'a post was returned twice or lost');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
