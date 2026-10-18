@@ -536,10 +536,12 @@ export function summarizeUnread(
   n = 3,
 ): { unread_count: number; unread_preview: UnreadPreview[] } {
   const db = cdb.db;
-  const cursor = getBoardCursor(cdb, agentId);
-  const w = unreadWhere(cursor, agentId);
+  // Create the row first (may write), then read the position inside the read transaction, so a
+  // consumeUnread that finished in another process just before cannot leave read posts counted.
+  getBoardCursor(cdb, agentId);
   db.exec('BEGIN');
   try {
+    const w = unreadWhere(ensureBoardCursor(db, agentId), agentId);
     const count = db
       .prepare(`SELECT COUNT(*) AS n FROM board_messages WHERE ${w.sql}`)
       .get(...(w.params as never[])) as { n: number };
@@ -625,27 +627,6 @@ export function readUnread(
   opts: { limit?: number } = {},
 ): { messages: BoardMessage[] } {
   return { messages: consumeUnread(cdb, agentId, opts) };
-}
-
-/**
- * Advance an agent's read position past the posts given, separately for directed and broadcast.
- * Only moves forward (MAX). Posts not addressed to the agent are ignored.
- */
-export function markBoardRead(cdb: CoordDb, agentId: string, messages: BoardMessage[]): void {
-  getBoardCursor(cdb, agentId);
-  const db = cdb.db;
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    advanceCursor(db, agentId, messages);
-    db.exec('COMMIT');
-  } catch (e) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      /* already closed */
-    }
-    throw e;
-  }
 }
 
 /**

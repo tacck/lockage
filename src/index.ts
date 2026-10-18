@@ -388,6 +388,8 @@ export function buildServer(
       },
     },
     async (a) => {
+      // These do not piggyback heartbeat, so start tracking the caller's board unread here too.
+      getBoardCursor(cdb, a.agent_id);
       // Issue #52: before running task_done (= while the worktree is still active), recompute dirty
       // from the worktree's git state and capture files outside the claim glob as unclaimed. Since
       // onTaskDone clears that worktree's dirty set on a successful merge, this computation must
@@ -605,7 +607,10 @@ export function buildServer(
         'Release a file claim (only the declarer may call it). Claims tied to a task are released by task_done, release_task, and PR post-merge cleanup, so you usually need not call this. Release claims not tied to a task with this (even if you do not, they are reclaimed on expiry after heartbeat stops).',
       inputSchema: { claim_id: z.string(), agent_id: z.string() },
     },
-    async (a) => ok(releaseClaim(cdb, a.claim_id, a.agent_id)),
+    async (a) => {
+      getBoardCursor(cdb, a.agent_id); // no heartbeat piggyback here: start tracking board unread
+      return ok(releaseClaim(cdb, a.claim_id, a.agent_id));
+    },
   );
 
   server.registerTool(
@@ -726,7 +731,7 @@ export function buildServer(
         kind: z
           .enum(['note', 'handoff', 'question', 'ticket_ready', 'pr_opened', 'pr_updated', 'pr_merged'])
           .optional(),
-        limit: z.number().int().optional(),
+        limit: z.number().int().min(1).optional(),
         unresolved_only: z.boolean().optional(),
       },
     },
@@ -739,8 +744,6 @@ export function buildServer(
         }
         return ok(readUnread(cdb, a.agent_id, { limit: a.limit }));
       }
-      // Reading "posts to me" identifies the caller: start tracking its unread from here.
-      if (a.to_agent) getBoardCursor(cdb, a.to_agent);
       return ok(
         readBoard(cdb, {
           since: a.since,
@@ -812,15 +815,17 @@ export function buildServer(
         keep_branch: z.boolean().optional(),
       },
     },
-    async (a) =>
-      ok(
+    async (a) => {
+      getBoardCursor(cdb, a.agent_id); // no heartbeat piggyback here: start tracking board unread
+      return ok(
         releaseWorktree(cdb, {
           agentId: a.agent_id,
           worktreePath: a.worktree_path,
           repoPath: a.repo_path,
           keepBranch: a.keep_branch,
         }),
-      ),
+      );
+    },
   );
 
   server.registerTool(
@@ -981,7 +986,7 @@ export function buildServer(
     'wait_for_unblock',
     {
       description:
-        'Wait once until one of the following happens: a task you are waiting on becomes ready; an unread board post addressed to you or to everyone; an overlap with another agent; or timeout. Returns what woke you via woke_by. Unread is counted from where you last read, so a post that arrived while you were working or between waits still wakes you; the returned posts are then marked read. Posts addressed to you count from the start even before your first call (e.g. a handoff_task to you before you launched), posts to everyone from your first lockage call with your agent_id (e.g. the post_board that names you). At most 100 posts per call; the rest wake the next call. Your own posts and ticket_ready / pr_opened / pr_updated / pr_merged do not wake you (read_board still returns them). Use it instead of repeatedly polling lists.',
+        'Wait once until one of the following happens: a task you are waiting on becomes ready; an unread board post addressed to you or to everyone; an overlap with another agent; or timeout. Returns what woke you via woke_by. Unread is counted from where you last read, so a post that arrived while you were working or between waits still wakes you; the returned posts are then marked read. Posts addressed to you count from the start even before your first call (e.g. a handoff_task to you before you launched), posts to everyone from your first lockage call made as yourself (e.g. the post_board that names you; block_task / resume_task / handoff_task do not count, as they may be called on your behalf). At most 100 posts per call; the rest wake the next call. Your own posts and ticket_ready / pr_opened / pr_updated / pr_merged do not wake you (read_board still returns them). Use it instead of repeatedly polling lists.',
       inputSchema: {
         agent_id: z.string(),
         task_id: z.string().optional().describe('the task whose dependency resolution you are waiting for'),

@@ -20,7 +20,6 @@ import {
   getBoardCursor,
   listUnread,
   countUnread,
-  markBoardRead,
   summarizeUnread,
   readUnread,
   consumeUnread,
@@ -379,27 +378,17 @@ test('unread: a new agent starts directed at 0 and broadcast at the latest seq',
   assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 0, broadcast_seq: 2 });
 });
 
-test('markBoardRead: advances directed and broadcast separately, only forward, and does not touch others', () => {
+test('consumeUnread: advances directed and broadcast separately and does not touch other agents', () => {
   getBoardCursor(cdb, 'A');
   getBoardCursor(cdb, 'C');
   postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd1' }); // seq 1
   postBoard(cdb, { agentId: 'B', body: 'b1' }); // seq 2
   postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd2' }); // seq 3
 
-  const unread = listUnread(cdb, 'A');
-  markBoardRead(cdb, 'A', unread.slice(0, 2)); // d1, b1
+  assert.deepEqual(consumeUnread(cdb, 'A', { limit: 2 }).map((m) => m.body), ['d1', 'b1']);
   assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 1, broadcast_seq: 2 });
-  assert.deepEqual(
-    listUnread(cdb, 'A').map((m) => m.body),
-    ['d2'],
-  );
-
-  markBoardRead(cdb, 'A', listUnread(cdb, 'A'));
+  assert.deepEqual(consumeUnread(cdb, 'A').map((m) => m.body), ['d2']);
   assert.equal(countUnread(cdb, 'A'), 0);
-
-  // a stale (older) mark does not move the position back
-  markBoardRead(cdb, 'A', unread.slice(0, 1));
-  assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 3, broadcast_seq: 2 });
 
   // C's position is untouched; the broadcast is still unread for C
   assert.deepEqual(getBoardCursor(cdb, 'C'), { directed_seq: 0, broadcast_seq: 0 });
@@ -409,35 +398,37 @@ test('markBoardRead: advances directed and broadcast separately, only forward, a
   );
 });
 
-test('board_cursors: adding the table to an existing DB starts known agents at the latest seq; later newcomers still start directed at 0', () => {
+test('board_cursors: adding the table to an existing DB seeds agents that ran at the latest seq, not workers that only received a handoff', () => {
   const dir = mkdtempSync(join(tmpdir(), 'lockage-cursor-'));
   const path = join(dir, 'db.sqlite');
   try {
     const first = openDb({ path, hostId: 'host-test' });
-    heartbeat(first, 'K'); // K is in agents
+    heartbeat(first, 'A'); // A ran (in agents)
     postBoard(first, { agentId: 'B', toAgent: 'A', kind: 'question', body: 'old, long resolved' });
     postBoard(first, { agentId: 'B', body: 'old broadcast' });
+    // W was handed a task but has not launched: it only appears as a to_agent
+    postBoard(first, { agentId: 'B', toAgent: 'W', kind: 'handoff', body: 'handoff to W' });
     first.db.exec('DROP TABLE board_cursors'); // reproduce a DB from before this table
     first.close();
 
     const second = openDb({ path, hostId: 'host-test' });
-    // A (named as to_agent), B (author) and K (agents) are seeded at the latest seq: no old post floods in
-    for (const agent of ['A', 'B', 'K']) {
-      assert.deepEqual(getBoardCursor(second, agent), { directed_seq: 2, broadcast_seq: 2 }, agent);
+    // A (agents) and B (author) start at the latest seq: no old post floods in
+    for (const agent of ['A', 'B']) {
+      assert.deepEqual(getBoardCursor(second, agent), { directed_seq: 3, broadcast_seq: 3 }, agent);
       assert.equal(countUnread(second, agent), 0, agent);
     }
-    // posts after the upgrade are unread as usual; a newcomer N still picks up a post made before it appeared
+    const w = second.db.prepare(`SELECT 1 FROM board_cursors WHERE agent_id = 'W'`).get();
+    assert.equal(w, undefined, 'W was seeded although it never ran');
+    // W starts like any newcomer: its handoff from before the upgrade is still unread
+    assert.deepEqual(listUnread(second, 'W').map((m) => m.body), ['handoff to W']);
     postBoard(second, { agentId: 'B', toAgent: 'A', body: 'new for A' });
-    postBoard(second, { agentId: 'B', toAgent: 'N', kind: 'handoff', body: 'handoff to N' });
-    assert.deepEqual(listUnread(second, 'A').map((m) => m.body), ['new for A']);
-    assert.deepEqual(listUnread(second, 'N').map((m) => m.body), ['handoff to N']);
-    markBoardRead(second, 'A', listUnread(second, 'A'));
+    assert.deepEqual(consumeUnread(second, 'A').map((m) => m.body), ['new for A']);
     second.close();
 
-    // reopening does not seed again (the table exists) and the position survives
+    // reopening does not migrate again and the positions survive
     const third = openDb({ path, hostId: 'host-test' });
     assert.equal(countUnread(third, 'A'), 0, 'the read position survives a reopen');
-    assert.equal(countUnread(third, 'N'), 1, 'N is not re-seeded past its unread handoff');
+    assert.equal(countUnread(third, 'W'), 1);
     third.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -581,6 +572,24 @@ test('readUnread: limit returns the oldest unread first and leaves the rest unre
   );
 });
 
+
+/** Run an ES module snippet in a separate node process that can import the TypeScript sources. */
+function spawnTs(script: string) {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  return spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { cwd: root });
+}
+
+/** Collect a spawned process's stdout as JSON, or reject with its stderr. */
+function jsonOut<T>(p: ReturnType<typeof spawnTs>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let out = '';
+    let err = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('close', (code) => (code === 0 ? resolve(JSON.parse(out) as T) : reject(new Error(err))));
+  });
+}
+
 // ---- consuming unread: paging and concurrency ----
 
 test('consumeUnread: a limit boundary across directed and broadcast leaves the rest unread', () => {
@@ -630,8 +639,8 @@ test('consumeUnread: processes consuming the same agent concurrently never get t
     setup.close();
 
     const script = `
-      const { openDb } = await import(${JSON.stringify(join(root, 'dist/db/index.js'))});
-      const { consumeUnread } = await import(${JSON.stringify(join(root, 'dist/lockage/board.js'))});
+      const { openDb } = await import(${JSON.stringify(join(root, 'src/db/index.ts'))});
+      const { consumeUnread } = await import(${JSON.stringify(join(root, 'src/lockage/board.ts'))});
       const cdb = openDb({ path: ${JSON.stringify(path)}, hostId: 'host-test' });
       const got = [];
       for (;;) {
@@ -642,18 +651,38 @@ test('consumeUnread: processes consuming the same agent concurrently never get t
       cdb.close();
       process.stdout.write(JSON.stringify(got));
     `;
-    const run = () =>
-      new Promise<number[]>((resolve, reject) => {
-        const p = spawn(process.execPath, ['--input-type=module', '-e', script]);
-        let out = '';
-        let err = '';
-        p.stdout.on('data', (d) => (out += d));
-        p.stderr.on('data', (d) => (err += d));
-        p.on('close', (code) => (code === 0 ? resolve(JSON.parse(out)) : reject(new Error(err))));
-      });
+    const run = () => jsonOut<number[]>(spawnTs(script));
     const results = await Promise.all([run(), run(), run(), run()]);
     const all = results.flat().sort((a, b) => a - b);
     assert.deepEqual(all, Array.from({ length: POSTS }, (_, i) => i + 1), 'a post was returned twice or lost');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('board_cursors migration: processes opening a pre-upgrade ledger at once seed it exactly once', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lockage-migrate-'));
+  const path = join(dir, 'db.sqlite');
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  try {
+    const setup = openDb({ path, hostId: 'host-test' });
+    heartbeat(setup, 'A');
+    for (let i = 1; i <= 5; i++) postBoard(setup, { agentId: 'B', toAgent: 'A', body: `old ${i}` });
+    setup.db.exec('DROP TABLE board_cursors');
+    setup.close();
+
+    // each process opens the ledger and asks for A's unread right away (which would create A's row
+    // at directed 0 if it ran before the seed)
+    const script = `
+      const { openDb } = await import(${JSON.stringify(join(root, 'src/db/index.ts'))});
+      const { countUnread } = await import(${JSON.stringify(join(root, 'src/lockage/board.ts'))});
+      const cdb = openDb({ path: ${JSON.stringify(path)}, hostId: 'host-test' });
+      const n = countUnread(cdb, 'A');
+      cdb.close();
+      process.stdout.write(JSON.stringify(n));
+    `;
+    const counts = await Promise.all([1, 2, 3, 4].map(() => jsonOut<number>(spawnTs(script))));
+    assert.deepEqual(counts, [0, 0, 0, 0], 'A saw old posts as unread: the seed raced');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

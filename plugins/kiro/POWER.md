@@ -95,7 +95,7 @@ from the agents (the `publisher` set is enabled by `lockage-publish` itself, so 
 | Tool | Role |
 |---|---|
 | `post_board` | Post to the shared board (specify `to_agent` for a directed handoff). The post becomes unread for its recipient (or for everyone else, without `to_agent`) |
-| `read_board` | Read the board (incremental fetch with a `since` cursor. To see only unresolved questions, `kind:"question", unresolved_only:true`). `agent_id` + `unread_only:true` returns only your unread posts (up to 100) and marks them read; it cannot be combined with `since` / `to_agent` / `kind` / `unresolved_only` |
+| `read_board` | Read the board (incremental fetch with a `since` cursor. To see only unresolved questions, `kind:"question", unresolved_only:true`). `agent_id` + `unread_only:true` returns only your unread posts (100 by default, changeable with `limit`) and marks them read; it cannot be combined with `since` / `to_agent` / `kind` / `unresolved_only` |
 | `resolve_question` | Mark a question resolved (a complement to auto-resolution. Idempotent) |
 
 ### worktree
