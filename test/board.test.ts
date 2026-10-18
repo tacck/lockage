@@ -1,11 +1,11 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { openDb, migrate, unixNow, type CoordDb } from '../src/db/index.js';
+import { openDb, migrate, migrateBoardCursors, unixNow, type CoordDb } from '../src/db/index.js';
 import { createTask, claimTask, releaseTask, heartbeat } from '../src/lockage/claim.js';
 import {
   postBoard,
@@ -660,6 +660,33 @@ test('consumeUnread: processes consuming the same agent concurrently never get t
   }
 });
 
+test('migrateBoardCursors: a seed that fails leaves no table behind, so the next open retries', () => {
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'old' });
+  cdb.db.exec('DROP TABLE board_cursors');
+  // an agents table the seed cannot read makes the seed throw after the CREATE ran
+  cdb.db.exec('DROP TABLE agents');
+  cdb.db.exec('CREATE TABLE agents (name TEXT)');
+  const schema = readFileSync(join(fileURLToPath(new URL('..', import.meta.url)), 'src/db/schema.sql'), 'utf8');
+  assert.throws(() => migrateBoardCursors(cdb.db, schema));
+  const table = cdb.db.prepare(`SELECT 1 FROM sqlite_master WHERE name = 'board_cursors'`).get();
+  assert.equal(table, undefined, 'board_cursors survived a failed seed');
+});
+
+test('migrateBoardCursors: a ledger without an agents table seeds board authors only', () => {
+  postBoard(cdb, { agentId: 'B', toAgent: 'W', kind: 'handoff', body: 'to W' });
+  cdb.db.exec('DROP TABLE board_cursors');
+  cdb.db.exec('DROP TABLE agents');
+  const schema = readFileSync(join(fileURLToPath(new URL('..', import.meta.url)), 'src/db/schema.sql'), 'utf8');
+  migrateBoardCursors(cdb.db, schema);
+  const rows = cdb.db.prepare(`SELECT agent_id FROM board_cursors ORDER BY agent_id`).all();
+  assert.deepEqual(rows.map((r: any) => r.agent_id), ['B']);
+  migrateBoardCursors(cdb.db, schema); // a second call is a no-op
+  assert.equal(cdb.db.prepare(`SELECT COUNT(*) AS n FROM board_cursors`).get()?.n, 1);
+});
+
+// A smoke test: the race window is a few milliseconds and the child processes start at slightly
+// different times, so this passing does not prove the migration is atomic (the two tests above do the
+// deterministic part). It guards against a gross regression such as seeding after other work.
 test('board_cursors migration: processes opening a pre-upgrade ledger at once seed it exactly once', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'lockage-migrate-'));
   const path = join(dir, 'db.sqlite');

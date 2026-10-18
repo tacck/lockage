@@ -94,6 +94,10 @@ export function openDb(opts: OpenOptions): CoordDb {
  * is a worker that has not launched yet (or nobody): it is left out, so like any newcomer it starts
  * directed at 0 and still picks up a handoff made to it before the upgrade.
  *
+ * The price, once per ledger: for an agent that has run, posts addressed to it that it had not read
+ * yet when the ledger was upgraded (say, an answer that arrived while its task was blocked) are taken
+ * as read. They stay on the board; read_board without unread_only still returns them.
+ *
  * The check, the CREATE and the seed share one BEGIN IMMEDIATE. Posts take the same lock, so none can
  * land between reading MAX(seq) and writing it as read; a crash leaves neither table nor seed (the next
  * open retries); and a second process opening the ledger at the same time waits, then finds both done.
