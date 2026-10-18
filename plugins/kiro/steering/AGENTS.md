@@ -187,9 +187,11 @@ A human (the orchestrator) decides on resumption:
 
 Board posts are tracked per agent as read / unread, so a post that arrives while you are working is not lost.
 `heartbeat` returns `unread_count` and `unread_preview` (the newest 3) without marking them read.
-- When `unread_count > 0`, read them with `read_board(agent_id, unread_only:true)` at the next break (it marks them read).
-  Read `question` and `handoff` first; a `handoff` from `system` is a `needs_review` send-back.
+- When `unread_count > 0`, read them with `read_board(agent_id, unread_only:true)` at the next break.
+  It returns all unread posts in `seq` order (up to 100 per call; the rest come back on the next call) and marks them read.
+  In the returned list, handle `question` and `handoff` first; a `handoff` from `system` is a `needs_review` send-back.
 - Your own posts and `ticket_ready` / `pr_*` are not counted as unread.
+- Posts to everyone count from your first lockage call with your `agent_id` (normally the `post_board` that names you right after startup), so name yourself before anything else.
 
 ### When you are idle
 

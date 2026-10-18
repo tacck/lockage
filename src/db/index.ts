@@ -56,6 +56,8 @@ export function openDb(opts: OpenOptions): CoordDb {
   db.exec('PRAGMA foreign_keys=ON;');
 
   const schema = readFileSync(SCHEMA_PATH, 'utf8');
+  // Checked before schema.sql creates it: see seedBoardCursors.
+  const hadBoardCursors = hasTable(db, 'board_cursors');
 
   // Apply the issue → ticket rename (#70) before schema.sql. If applied after, CREATE TABLE IF NOT
   // EXISTS would create an empty tickets first, making the existing issues impossible to rename.
@@ -70,6 +72,7 @@ export function openDb(opts: OpenOptions): CoordDb {
   // Idempotent migration for an existing DB. CREATE TABLE IF NOT EXISTS does not add columns to an
   // existing table, so newly added columns are checked for presence via PRAGMA table_info and ALTERed.
   migrate(db);
+  if (!hadBoardCursors) seedBoardCursors(db);
 
   return {
     db,
@@ -78,6 +81,27 @@ export function openDb(opts: OpenOptions): CoordDb {
       db.close();
     },
   };
+}
+
+/**
+ * When board_cursors is first added to an existing ledger, give every agent already known to it a
+ * read position at the current MAX(seq), for both directed and broadcast. Without this, those
+ * agents would start directed at 0 like a brand-new agent and see every past post addressed to them
+ * (long-resolved questions and handoffs) as unread. Agents first seen later still start directed at
+ * 0, so a handoff to a not-yet-launched worker is still picked up.
+ *
+ * "Known" = in agents, or named as an author or to_agent on the board. INSERT OR IGNORE keeps two
+ * processes opening the ledger at once from conflicting. A brand-new ledger has nobody to seed.
+ */
+export function seedBoardCursors(db: DatabaseSync): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO board_cursors (agent_id, directed_seq, broadcast_seq, updated_at)
+     SELECT k.agent_id, m.seq, m.seq, ?
+       FROM (SELECT agent_id FROM agents
+             UNION SELECT author FROM board_messages
+             UNION SELECT to_agent FROM board_messages WHERE to_agent IS NOT NULL) AS k,
+            (SELECT COALESCE(MAX(seq), 0) AS seq FROM board_messages) AS m`,
+  ).run(unixNow());
 }
 
 /** Whether a column exists (PRAGMA table_info). */

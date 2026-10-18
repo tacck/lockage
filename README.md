@@ -238,9 +238,9 @@ Each agent has its own board read position, and `wait_for_unblock` / `heartbeat`
 
 - **Unread survives not waiting.** A post that arrives while you are working, or between a timeout and the next `wait_for_unblock`, wakes the next call.
 - **Read advances when posts are returned** by `wait_for_unblock` (`woke_by:"board"`) or `read_board(unread_only)`. `heartbeat` only reports; it does not mark read.
-- **Starting point for a new agent:** posts addressed to you count from the beginning (so a `handoff_task` to a worker before it launched is picked up), posts to everyone from your first call (old history does not flood in).
+- **Starting point for a new agent:** posts addressed to you count from the beginning (so a `handoff_task` to a worker before it launched is picked up). Posts to everyone count from your first lockage call with your `agent_id` — the `post_board` that names you at startup, `heartbeat`, `read_board(to_agent:<you>)` or any tool that takes your `agent_id` — so old history does not flood in. When a ledger from before this feature is upgraded, agents it already knows start at the latest post for both, so long-resolved posts do not come back as unread.
 - **Not counted as unread:** your own posts and `ticket_ready` / `pr_opened` / `pr_updated` / `pr_merged` (records for `publisher_status` / `lockage-publish`). `read_board` without `unread_only` still returns them.
-- While working, when `heartbeat` shows `unread_count > 0`, read them with `read_board(agent_id, unread_only:true)` at the next break, `question` and `handoff` first.
+- While working, when `heartbeat` shows `unread_count > 0`, read them with `read_board(agent_id, unread_only:true)` at the next break. It returns all unread posts in `seq` order (up to 100 per call; the rest stay unread for the next call) and marks them read; in the returned list, handle `question` and `handoff` first.
 
 ---
 
@@ -334,7 +334,7 @@ sequenceDiagram
 
     Note over Agent,Lockage: ⑧ Next — when idle, wait via long-poll
     Agent->>Lockage: wait_for_unblock(agent_id)
-    Lockage-->>Agent: wake on dependency resolved / board addressed to you / overlap
+    Lockage-->>Agent: wake on dependency resolved / unread board post to you or to all / overlap
 ```
 
 **Key points**:

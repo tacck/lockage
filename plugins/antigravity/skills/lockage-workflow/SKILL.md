@@ -101,7 +101,8 @@ For work that falls under the top of AGENTS.md's "When the user instructs you no
   → do not stop it while you continue non-lockage work (build, test, etc.)
 □ Look at heartbeat's unread_count
   → if > 0, at the next break read_board(agent_id, unread_only:true) (marks them read)
-  → read question and handoff first (unread_preview shows the newest 3: seq / author / kind / body_head / ref_task_id)
+  → it returns all unread in seq order (up to 100 per call; the rest come next call). In that list, handle question and handoff first
+    (unread_preview shows the newest 3: seq / author / kind / body_head / ref_task_id)
   → your own posts and ticket_ready / pr_* are not counted
 □ git commit at each break (on the worktree)
 ```
