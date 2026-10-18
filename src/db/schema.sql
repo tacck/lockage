@@ -154,7 +154,11 @@ CREATE INDEX IF NOT EXISTS idx_board_to  ON board_messages(to_agent, seq);
 -- not waiting is still picked up later. Two positions because they start differently for a new agent:
 -- directed (to_agent = self) starts at 0 so a handoff to a not-yet-started worker is not missed;
 -- broadcast (to_agent IS NULL) starts at MAX(seq) at first sight so old history does not flood in.
--- A brand-new table, so schema.sql's CREATE TABLE IF NOT EXISTS also creates it in an existing DB.
+-- A new ledger gets it from this file as usual. An existing ledger gets it from migrateBoardCursors
+-- (src/db/index.ts), which creates it together with its seed: that function cuts this statement out of
+-- the file with a regex: keep its first line as it is, end it with a line holding only the closing
+-- parenthesis and semicolon, and do not quote that first line anywhere above it in this file, or
+-- opening a pre-upgrade ledger fails.
 CREATE TABLE IF NOT EXISTS board_cursors (
     agent_id      TEXT PRIMARY KEY,
     directed_seq  INTEGER NOT NULL DEFAULT 0,  -- last read seq among posts addressed to this agent

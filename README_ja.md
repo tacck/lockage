@@ -195,7 +195,7 @@ MCP ツールとして以下を公開しています。`agent_id` は各エー�
 | ツール | 役割 |
 |---|---|
 | `post_board` | 共有ボードへ投稿（`to_agent` 指定で有向 handoff）。投稿は宛先のエージェント（`to_agent` を省いたときは自分以外の全員）にとって未読になる |
-| `read_board` | ボード読取（`since` カーソルで差分取得。`unresolved_only:true` で解決済みの question を除く。未解決の question だけを見るときは `kind:"question"` と組み合わせる）。`agent_id` と `unread_only:true` を渡すと、自分の未読だけを返して既読にする（`since` / `to_agent` / `kind` / `unresolved_only` とは組み合わせられない） |
+| `read_board` | ボード読取（`since` カーソルで差分取得。`unresolved_only:true` で解決済みの question を除く。未解決の question だけを見るときは `kind:"question"` と組み合わせる）。`agent_id` と `unread_only:true` を渡すと、自分の未読だけを返して既読にする（既定は 1 回 100 件で、`limit` で変えられる。`since` / `to_agent` / `kind` / `unresolved_only` とは組み合わせられない） |
 | `resolve_question` | question を解決済みにする（自動解決の補完。task を done/abandoned にすると紐づく未解決 question は自動解決されるので、`ref_task_id` を持たない question や人間が回答だけして閉じたい question を明示的に閉じる用。冪等） |
 
 ### worktree
@@ -238,8 +238,8 @@ MCP ツールとして以下を公開しています。`agent_id` は各エー�
 
 - **待機していなくても未読は残ります。** 作業中や、タイムアウトしてから次の `wait_for_unblock` を呼ぶまでの間に届いた投稿でも、次の呼び出しが起きます。
 - **既読が進むのは投稿を返したときです。** `wait_for_unblock`（`woke_by:"board"`）か `read_board(unread_only)` が投稿を返すと既読になります。`heartbeat` は知らせるだけで、既読にはしません。
-- **新しいエージェントの読み始め:** 自分宛ての投稿は最初から数えます（起動前の worker への `handoff_task` も拾えます）。全員宛ての投稿は、自分として初めて lockage を呼んだ時点から数えます（起動時に名乗る `post_board`、`heartbeat`、`task_done` など、自分の `agent_id` で呼ぶツール。代理で呼ばれることのある `block_task` / `resume_task` / `handoff_task` は数えません）。過去の投稿は流れ込みません。この機能より前の台帳を上げたときは、すでに動いたことのあるエージェントは宛先付き・全員宛てとも最新の投稿から数えるので、解決済みの古い投稿が未読に戻ることはありません。タスクを引き継がれてまだ起動していない worker は、新しいエージェントと同じ扱いになり、その handoff を受け取れます。
-- **`handoff` は 2 種類あります:** `author:"system"` は、他の誰かが動かしたマージで差し戻された `needs_review` の通知です（自分の `task_done` で差し戻されたときは戻り値で返り、board には投稿されません）。本文は `merge needs review: <ファイル>`、またはマージそのものが失敗したときの `merge failed, needs review: <エラー>` です。それ以外の投稿者は、`handoff_task` で自分に引き継がれたタスクの可能性があります。`kind:"handoff"` は誰でも直接投稿できるので、`list_tasks(assignee:<自分>)` で確かめます。
+- **新しいエージェントの読み始め:** 自分宛ての投稿は最初から数えます（起動前の worker への `handoff_task` も拾えます）。全員宛ての投稿は、自分として初めて lockage を呼んだ時点から数えます（起動時に名乗る `post_board`、`heartbeat`、`wait_for_unblock`、`task_done`、`claim_task` のように lease を延ばすツールなど。代理で呼ばれることのある `block_task` / `resume_task` / `handoff_task` と、`agent_id` を絞り込みに使うだけのツール（`unread_only` なしの `read_board`、`list_dirty`、`list_worktrees`）は数えません）。過去の投稿は流れ込みません。この機能より前の台帳を上げたときは、すでに動いたことのあるエージェントは宛先付き・全員宛てとも最新の投稿から数えるので、解決済みの古い投稿が未読に戻ることはありません。その代わり、上げた時点でまだ読んでいなかった自分宛ての投稿も既読として扱われます（board には残るので `read_board` で読めます）。タスクを引き継がれてまだ起動していない worker は、新しいエージェントと同じ扱いになり、その handoff を受け取れます。
+- **`handoff` は 2 種類あります:** `author:"system"` は、他の誰かが動かしたマージで差し戻された `needs_review` の通知です（自分の `task_done` で差し戻されたときは、通常は戻り値で返り、board には投稿されません。マージが同時に動くと両方に届くことがあるので、処理済みの投稿は読み流します）。本文は `merge needs review: <ファイル>`、またはマージそのものが失敗したときの `merge failed, needs review: <エラー>` です。それ以外の投稿者は、`handoff_task` で自分に引き継がれたタスクの可能性があります。`kind:"handoff"` は誰でも直接投稿できるので、`list_tasks(assignee:<自分>)` で確かめます。
 - **未読に数えないもの:** 自分の投稿と、`ticket_ready` / `pr_opened` / `pr_updated` / `pr_merged`（`publisher_status` / `lockage-publish` のための記録）。`unread_only` なしの `read_board` では、これまでどおり読めます。
 - 作業中に `heartbeat` の `unread_count > 0` を見たら、区切りのよいところで `read_board(agent_id, unread_only:true)` で読みます。未読を `seq` 順に返し（既定は 1 回 100 件で、`limit` で変えられます。残りは未読のまま次の呼び出しで返ります）、既読にします。返った一覧の中では `question` と `handoff` を先に処理します。
 

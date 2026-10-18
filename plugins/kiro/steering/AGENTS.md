@@ -192,7 +192,9 @@ Board posts are tracked per agent as read / unread, so a post that arrives while
   In the returned list, handle `question` and `handoff` first. A `handoff` is one of two things; see "How to tell the two kinds of handoff apart" below.
 - Your own posts and `ticket_ready` / `pr_*` are not counted as unread.
 - Posts to everyone count from your first lockage call made as yourself (normally the `post_board` that names you right after startup), so name yourself before anything else.
-  `block_task` / `resume_task` / `handoff_task` do not count: they may be called on your behalf.
+  That is `post_board`, `heartbeat`, `wait_for_unblock`, `read_board(unread_only)`, `task_done`, and the tools that extend your lease
+  (`claim_task`, `claim_files`, `assign_worktree`, ...). Not counted: `block_task` / `resume_task` / `handoff_task` (they may be called
+  on your behalf) and tools where `agent_id` is only a filter (`read_board` without `unread_only`, `list_dirty`, `list_worktrees`).
 
 ### When you are idle
 
@@ -204,16 +206,20 @@ Do not keep hitting `list_tasks` in an empty loop.
 ### How to tell the two kinds of handoff apart
 
 Look at the `author` of a `kind:"handoff"` post (whether `wait_for_unblock` returned it or you read it with `read_board`).
-- **`author:"system"` = a `needs_review` send-back you have not seen.** Your own `task_done` returns its send-back in the result
-  and does not post it, so a board post means someone else's merge run hit your task. `ref_task_id` is the task. The body is one of:
+- **`author:"system"` = a `needs_review` send-back.** Your own `task_done` normally returns its send-back in the result and does
+  not post it, so a board post usually means someone else's merge run hit your task. When merges run at the same time, the same
+  send-back can reach you both ways: if you already handled it from a `task_done` result, skip the post. `ref_task_id` is the task.
+  The body is one of:
   - `merge needs review: <files>`: files likely to conflict. Resolve them in that task's worktree, re-commit, and re-run `task_done`.
   - `merge failed, needs review: <error>`: the merge itself failed. Read the error, fix the cause in the worktree if you can
-    (e.g. resolve the conflict it names), and re-run `task_done`; if you cannot tell what to do, leave a `question` with `ref_task_id`.
+    (e.g. resolve the conflict it names), and re-run `task_done`. If you cannot tell what to do, or the same error comes back after
+    your fix, stop retrying: leave a `question` with `ref_task_id` and `block_task` (see "When you cannot complete").
 - **Any other `author` = possibly a task handed over to you.** `handoff_task` posts as the previous assignee, but anyone can also
   post `kind:"handoff"` directly. Confirm with `list_tasks(assignee:<your agent_id>, status:"in_progress")`:
-  - The task in `ref_task_id` is now yours: read the predecessor's `question` with `read_board` and
+  - The task in `ref_task_id` has just become yours: read the predecessor's `question` with `read_board` and
     continue from where the worktree left off.
-  - It is not yours: it is only a message. Read it and act on it (reply with `post_board` if asked).
+  - It is not yours, or it was already yours before the post: it is only a message about that task. Read it and act on it
+    (reply with `post_board` if asked).
 
 ### Safety net before session end
 
