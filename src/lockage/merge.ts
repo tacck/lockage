@@ -409,7 +409,17 @@ export function enqueueMerge(cdb: CoordDb, item: MergeArgs): EnqueueResult {
  * as needs_review (no hard block — a human/the assignee resolves it in the worktree).
  * Uses a while loop rather than tail recursion for the next item (avoids stack overflow on long queues).
  */
-export function processMergeQueue(cdb: CoordDb): ProcessResult {
+export function processMergeQueue(
+  cdb: CoordDb,
+  opts: {
+    /**
+     * The agent whose task_done is driving this run. Its own send-backs reach it through the return
+     * value, so they are not also posted to the board (that was a second copy of the same notice).
+     * Omitted for process_merge_queue, where every assignee is notified on the board.
+     */
+    caller?: string;
+  } = {},
+): ProcessResult {
   const db = cdb.db;
   const merged: MergedEntry[] = [];
   const needsReview: NeedsReviewEntry[] = [];
@@ -510,7 +520,7 @@ export function processMergeQueue(cdb: CoordDb): ProcessResult {
             `UPDATE merge_queue SET state = 'needs_review', precheck = json(?), processed_at = ? WHERE id = ?`,
           ).run(JSON.stringify({ error: res.error }), now, item.id);
           needsReview.push({ task_id: item.task_id, branch: item.branch, contested: [], error: res.error });
-          notifyNeedsReview(cdb, item, [], res.error);
+          notifyNeedsReview(cdb, item, [], res.error, opts.caller);
           wakeTargets.add(item.agent_id);
         }
       } else {
@@ -519,7 +529,7 @@ export function processMergeQueue(cdb: CoordDb): ProcessResult {
           `UPDATE merge_queue SET state = 'needs_review', precheck = json(?), processed_at = ? WHERE id = ?`,
         ).run(JSON.stringify({ contested }), now, item.id);
         needsReview.push({ task_id: item.task_id, branch: item.branch, contested });
-        notifyNeedsReview(cdb, item, contested);
+        notifyNeedsReview(cdb, item, contested, undefined, opts.caller);
         wakeTargets.add(item.agent_id);
       }
     } catch (e) {
@@ -530,7 +540,7 @@ export function processMergeQueue(cdb: CoordDb): ProcessResult {
         `UPDATE merge_queue SET state = 'needs_review', precheck = json(?), processed_at = ? WHERE id = ?`,
       ).run(JSON.stringify({ error: message }), unixNow(), item.id);
       needsReview.push({ task_id: item.task_id, branch: item.branch, contested: [], error: message });
-      notifyNeedsReview(cdb, item, [], message);
+      notifyNeedsReview(cdb, item, [], message, opts.caller);
       wakeTargets.add(item.agent_id);
       // continue the loop (no break/throw) — subsequent queued rows are processed normally.
     }
@@ -542,13 +552,17 @@ export function processMergeQueue(cdb: CoordDb): ProcessResult {
 /**
  * Notify the assignee of needs_review via a board handoff (§4.6). No separate board wake: the post is
  * unread for the assignee, so its wait_for_unblock returns on it (a wake on top made it return twice).
+ * Skipped when the assignee is the caller: its own task_done already returns this send-back. Another
+ * assignee's item processed in the same run, or a run from process_merge_queue, is still posted.
  */
 function notifyNeedsReview(
   cdb: CoordDb,
   item: MergeQueueRow,
   contested: string[],
   error?: string,
+  caller?: string,
 ): void {
+  if (caller !== undefined && item.agent_id === caller) return;
   const body = error
     ? `merge failed, needs review: ${error}`
     : `merge needs review: ${contested.join(', ')}`;
@@ -922,7 +936,7 @@ export function onTaskDone(cdb: CoordDb, item: MergeArgs): OnTaskDoneResult {
   // sees inflight, so if another process handles our item it does not appear in r. Avoid over-engineering;
   // limit it to "fill the final state of our own merge_id into the result" (hand-off policy).
   const { merge_id } = enqueueMerge(cdb, item);
-  const r = processMergeQueue(cdb);
+  const r = processMergeQueue(cdb, { caller: item.agentId });
 
   const merged = [...r.merged];
   const needsReview = [...r.needs_review];
