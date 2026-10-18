@@ -22,7 +22,7 @@ define "what to keep." Whenever the two diverge, always prefer `AGENTS.md`.
   Do not snatch a task you could not claim; move to another task.
 - **During work**: always edit inside your assigned `worktree_path` (do not touch the main tree directly.
   For details, see `main-tree-guard.md`). Beat the `heartbeat` periodically. Dirty is auto-computed by lockage.
-  If `heartbeat`'s `unread_count` > 0, read with `read_board(agent_id, unread_only:true)` at the next break (it returns all unread; handle `question` / `handoff` first).
+  If `heartbeat`'s `unread_count` > 0, read with `read_board(agent_id, unread_only:true)` at the next break (it returns unread in `seq` order, 100 per call by default; handle `question` / `handoff` first).
 - **Finish work**: commit on the worktree → `task_done`. `needs_review` / `overlaps` is not "stop";
   first resolve, contact and proceed yourself (for details, see `AGENTS.md`).
 - **Publish a PR**: do it with `lockage-publish` (for details, see `publish-pr.md`).

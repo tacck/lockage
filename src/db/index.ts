@@ -56,8 +56,9 @@ export function openDb(opts: OpenOptions): CoordDb {
   db.exec('PRAGMA foreign_keys=ON;');
 
   const schema = readFileSync(SCHEMA_PATH, 'utf8');
-  // Checked before schema.sql creates it: see seedBoardCursors.
-  const hadBoardCursors = hasTable(db, 'board_cursors');
+  // Before anything else creates board_cursors (schema.sql below, or the #70 rename which applies
+  // schema.sql itself): an existing ledger must get the table and its seed in one step.
+  migrateBoardCursors(db, schema);
 
   // Apply the issue → ticket rename (#70) before schema.sql. If applied after, CREATE TABLE IF NOT
   // EXISTS would create an empty tickets first, making the existing issues impossible to rename.
@@ -72,7 +73,6 @@ export function openDb(opts: OpenOptions): CoordDb {
   // Idempotent migration for an existing DB. CREATE TABLE IF NOT EXISTS does not add columns to an
   // existing table, so newly added columns are checked for presence via PRAGMA table_info and ALTERed.
   migrate(db);
-  if (!hadBoardCursors) seedBoardCursors(db);
 
   return {
     db,
@@ -84,24 +84,49 @@ export function openDb(opts: OpenOptions): CoordDb {
 }
 
 /**
- * When board_cursors is first added to an existing ledger, give every agent already known to it a
- * read position at the current MAX(seq), for both directed and broadcast. Without this, those
- * agents would start directed at 0 like a brand-new agent and see every past post addressed to them
- * (long-resolved questions and handoffs) as unread. Agents first seen later still start directed at
- * 0, so a handoff to a not-yet-launched worker is still picked up.
+ * Add board_cursors to an existing ledger (one that already has board_messages) and give every agent
+ * that has actually run a read position at the current MAX(seq), for both directed and broadcast.
+ * Without the seed, those agents would start directed at 0 like a brand-new agent and see every past
+ * post addressed to them (long-resolved questions and handoffs) as unread.
  *
- * "Known" = in agents, or named as an author or to_agent on the board. INSERT OR IGNORE keeps two
- * processes opening the ledger at once from conflicting. A brand-new ledger has nobody to seed.
+ * "Has actually run" = in agents (only an agent's own liveness signal adds it; a handoff_task made
+ * on behalf of a worker does not) or an author on the board. A name that only appears as a to_agent
+ * is a worker that has not launched yet (or nobody): it is left out, so like any newcomer it starts
+ * directed at 0 and still picks up a handoff made to it before the upgrade.
+ *
+ * The check, the CREATE and the seed share one BEGIN IMMEDIATE. Posts take the same lock, so none can
+ * land between reading MAX(seq) and writing it as read; a crash leaves neither table nor seed (the next
+ * open retries); and a second process opening the ledger at the same time waits, then finds both done.
+ * A brand-new ledger has nobody to seed: schema.sql creates the table as usual.
  */
-export function seedBoardCursors(db: DatabaseSync): void {
-  db.prepare(
-    `INSERT OR IGNORE INTO board_cursors (agent_id, directed_seq, broadcast_seq, updated_at)
-     SELECT k.agent_id, m.seq, m.seq, ?
-       FROM (SELECT agent_id FROM agents
-             UNION SELECT author FROM board_messages
-             UNION SELECT to_agent FROM board_messages WHERE to_agent IS NOT NULL) AS k,
-            (SELECT COALESCE(MAX(seq), 0) AS seq FROM board_messages) AS m`,
-  ).run(unixNow());
+export function migrateBoardCursors(db: DatabaseSync, schema: string): void {
+  if (!hasTable(db, 'board_messages') || hasTable(db, 'board_cursors')) return;
+  const ddl = schema.match(/CREATE TABLE IF NOT EXISTS board_cursors \([\s\S]*?\n\);/)?.[0];
+  if (!ddl) throw new Error('schema.sql has no board_cursors table');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    // The pre-lock check may be stale if another process migrated first.
+    if (!hasTable(db, 'board_cursors')) {
+      db.exec(ddl);
+      const known = hasTable(db, 'agents')
+        ? 'SELECT agent_id FROM agents UNION SELECT author FROM board_messages'
+        : 'SELECT author AS agent_id FROM board_messages';
+      db.prepare(
+        `INSERT OR IGNORE INTO board_cursors (agent_id, directed_seq, broadcast_seq, updated_at)
+         SELECT k.agent_id, m.seq, m.seq, ?
+           FROM (${known}) AS k,
+                (SELECT COALESCE(MAX(seq), 0) AS seq FROM board_messages) AS m`,
+      ).run(unixNow());
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* already closed */
+    }
+    throw e;
+  }
 }
 
 /** Whether a column exists (PRAGMA table_info). */

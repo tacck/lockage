@@ -364,19 +364,31 @@ test('heartbeat returns unread_count / unread_preview and read_board(unread_only
   cdb.close();
 });
 
-test('an agent that has only posted (or read posts to it) still gets later broadcasts as unread over JSON-RPC', async () => {
+test('an agent whose first call is post_board, task_done, release_claim or release_worktree still gets later broadcasts over JSON-RPC', async () => {
   const { client, cdb } = await connect();
   await client.callTool({ name: 'post_board', arguments: { agent_id: 'B', body: 'old broadcast' } });
-  // Phase 0: A names itself with post_board, R checks posts to it with read_board(to_agent)
+  // each agent's first call carrying its own agent_id (the last three fail, but still identify it)
   await client.callTool({ name: 'post_board', arguments: { agent_id: 'A', body: 'A joined' } });
+  await client.callTool({
+    name: 'task_done',
+    arguments: { agent_id: 'T', worktree_path: '/nowhere', branch: 'x', repo: '/nowhere' },
+  });
+  await client.callTool({ name: 'release_claim', arguments: { agent_id: 'C', claim_id: 'none' } });
+  await client.callTool({
+    name: 'release_worktree',
+    arguments: { agent_id: 'W', worktree_path: '/nowhere', repo_path: '/nowhere' },
+  });
+  // reading someone else's posts does not start their tracking
   await client.callTool({ name: 'read_board', arguments: { to_agent: 'R' } });
   await client.callTool({ name: 'post_board', arguments: { agent_id: 'B', body: 'after they appeared' } });
 
-  for (const agent of ['A', 'R']) {
+  for (const agent of ['A', 'T', 'C', 'W']) {
     const hb = parse(await client.callTool({ name: 'heartbeat', arguments: { agent_id: agent } }));
     assert.equal(hb.unread_count, 1, agent);
     assert.equal(hb.unread_preview[0]?.body_head, 'after they appeared', agent);
   }
+  const r = cdb.db.prepare(`SELECT 1 FROM board_cursors WHERE agent_id = 'R'`).get();
+  assert.equal(r, undefined, 'read_board(to_agent) created a read position for R');
   cdb.close();
 });
 
@@ -389,6 +401,11 @@ test('read_board(unread_only) rejects a missing agent_id and other filters', asy
     arguments: { agent_id: 'A', unread_only: true, kind: 'question' },
   });
   assert.equal(withKind.isError, true);
+  const zeroLimit = await client.callTool({
+    name: 'read_board',
+    arguments: { agent_id: 'A', unread_only: true, limit: 0 },
+  });
+  assert.equal(zeroLimit.isError, true, 'a limit below 1 was accepted');
   cdb.close();
 });
 
