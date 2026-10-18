@@ -269,21 +269,39 @@ test('createTask(dependsOn): draws an edge and is_ready=false if a blocker is in
   cdb.close();
 });
 
-test('createTask(dependsOn): if depends_on members are mutually reachable, reject as a cycle', () => {
+test('createTask(dependsOn): a diamond (depends_on members connected by a path) is not a cycle', () => {
   const cdb = freshDb();
-  // first create the a→b edge (a blocks b)
+  // a blocks b; T depends on both a and b. a→b plus a→T, b→T is a DAG with a redundant edge.
   const a = createTask(cdb, { repo: 'app', title: 'a' });
   const b = createTask(cdb, { repo: 'app', title: 'b', dependsOn: [a.id] });
   assert.ok('id' in b);
-  // if a new task T has depends_on=[b, a], a is reachable to b (a→b) (not because of an existing a→b),
-  // so the pair [b,a] is the seed of a cycle → reject
-  const t = createTask(cdb, {
-    repo: 'app',
-    title: 't',
-    dependsOn: [(b as { id: string }).id, a.id],
-  });
-  assert.ok('ok' in t && t.ok === false);
-  assert.equal((t as { reason: string }).reason, 'cycle');
+  const t = createTask(cdb, { repo: 'app', title: 't', dependsOn: [a.id, b.id] });
+  assert.ok('id' in t, 'a diamond depends_on must not be rejected as a cycle');
+  const edges = cdb.db
+    .prepare(`SELECT from_task FROM task_edges WHERE to_task = ? AND kind = 'blocks' ORDER BY from_task`)
+    .all(t.id) as Array<{ from_task: string }>;
+  assert.deepEqual(
+    edges.map((e) => e.from_task),
+    [a.id, b.id].sort(),
+  );
+  // the order of depends_on does not matter
+  const t2 = createTask(cdb, { repo: 'app', title: 't2', dependsOn: [b.id, a.id] });
+  assert.ok('id' in t2);
+  cdb.close();
+});
+
+test('addDependency: a real cycle through a diamond is still rejected', () => {
+  const cdb = freshDb();
+  const a = createTask(cdb, { repo: 'app', title: 'a' });
+  const b = createTask(cdb, { repo: 'app', title: 'b', dependsOn: [a.id] });
+  const t = createTask(cdb, { repo: 'app', title: 't', dependsOn: [a.id, b.id] });
+  assert.ok('id' in b && 'id' in t);
+  // t→a would close a→t→a (and a→b→t→a)
+  const r = addDependency(cdb, t.id, a.id);
+  assert.ok(!r.ok && r.reason === 'cycle');
+  // t→b would close b→t→b
+  const r2 = addDependency(cdb, t.id, b.id);
+  assert.ok(!r2.ok && r2.reason === 'cycle');
   cdb.close();
 });
 
