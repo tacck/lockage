@@ -154,7 +154,7 @@ MCP ツールとして以下を公開しています。`agent_id` は各エー�
 
 | ツール | 役割 |
 |---|---|
-| `create_task` | タスクを作成（`ticket_id` は任意、`depends_on` で依存を張る。循環は拒否） |
+| `create_task` | タスクを作成（`ticket_id` は任意、`depends_on` で依存を張る。新しいタスクには入ってくる辺しか付かないので循環は起きない） |
 | `add_dependency` | 既存タスク間に依存（blocks）を張る（`from_task` が `to_task` をブロック。循環は拒否） |
 | `list_tasks` | タスク一覧（claim に渡す `version` 付き。`status`／`assignee`／`ticket_id`／`repo` で絞り込み。未割当のタスクは `status:"open"`。`ready_only` で依存解決済みのみ。`status:"blocked"` では孤児の判断材料として `blocked_age_sec`／`agent_silent_sec`／`last_question` を添える（自動回収はしない）） |
 | `claim_task` | 原子的にタスクを占有（CAS。競合は `conflict` 返却でブロックしない） |

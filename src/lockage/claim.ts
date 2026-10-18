@@ -32,36 +32,9 @@ export type ClaimResult =
 
 /**
  * Create a task. ticket_id is nullable (model 3: minor tasks without a ticket are allowed).
- * Passing depends_on adds edges to the dependency DAG (blocks). It cycle-checks before adding edges
- * and rejects depends_on that would form a cycle with { ok:false, reason:'cycle' } (§4.8 DAG invariant).
+ * Passing depends_on adds an edge D→T (D blocks T) for each D. The new task T only gets incoming
+ * edges, so this never forms a cycle (§4.8 DAG invariant); cycles are rejected by addDependency.
  */
-export interface CycleError {
-  ok: false;
-  reason: 'cycle';
-  detail: string;
-}
-
-export function createTask(
-  cdb: CoordDb,
-  args: {
-    repo: string;
-    title: string;
-    description?: string;
-    ticketId?: string | null;
-    priority?: number;
-  },
-): Task;
-export function createTask(
-  cdb: CoordDb,
-  args: {
-    repo: string;
-    title: string;
-    description?: string;
-    ticketId?: string | null;
-    priority?: number;
-    dependsOn: string[];
-  },
-): Task | CycleError;
 export function createTask(
   cdb: CoordDb,
   args: {
@@ -72,14 +45,11 @@ export function createTask(
     priority?: number;
     dependsOn?: string[];
   },
-): Task | CycleError {
+): Task {
   const dependsOn = args.dependsOn ?? [];
 
-  // No cycle check is needed here. The new task T has no edges yet, so after adding D→T for each
-  // depends_on D, T has only incoming edges and cannot lie on a cycle; the existing graph is already a
-  // DAG (§4.8). A path between two depends_on members (D1→D2 with T depending on both) is only a
-  // redundant edge, not a cycle. Checking reachability between members wrongly rejected such diamonds.
-  // The CycleError branch of the return type stays for API compatibility; addDependency is where cycles can form.
+  // No cycle check here: a path between two depends_on members (D1→D2 with T depending on both) is
+  // only a redundant edge, not a cycle. Checking reachability between members wrongly rejected such diamonds.
 
   const now = unixNow();
   const id = ulid();
