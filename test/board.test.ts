@@ -1,7 +1,12 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb, migrate, unixNow, type CoordDb } from '../src/db/index.js';
-import { createTask, claimTask, releaseTask } from '../src/lockage/claim.js';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { openDb, migrate, migrateBoardCursors, unixNow, type CoordDb } from '../src/db/index.js';
+import { createTask, claimTask, releaseTask, heartbeat } from '../src/lockage/claim.js';
 import {
   postBoard,
   readBoard,
@@ -12,6 +17,14 @@ import {
   takePendingWakes,
   isReady,
   waitForUnblock,
+  getBoardCursor,
+  listUnread,
+  countUnread,
+  summarizeUnread,
+  readUnread,
+  consumeUnread,
+  UNREAD_RETURN_LIMIT,
+  type BoardMessage,
 } from '../src/lockage/board.js';
 import { publishDirty, claimFiles } from '../src/lockage/files.js';
 
@@ -320,4 +333,384 @@ test('claim→release does not affect board/wake (regression)', () => {
   const c = claimTask(cdb, t.id, 'A', t.version);
   assert.equal(c.ok, true);
   assert.equal(releaseTask(cdb, t.id, 'A').ok, true);
+});
+
+// ---- board read position (board_cursors) ----
+
+test('unread: counts posts addressed to me and to everyone, but not to others, my own, or system kinds', () => {
+  getBoardCursor(cdb, 'A'); // first sight at seq 0
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', kind: 'question', body: 'to A' });
+  postBoard(cdb, { agentId: 'B', body: 'to everyone' });
+  postBoard(cdb, { agentId: 'B', toAgent: 'C', body: 'to C' });
+  postBoard(cdb, { agentId: 'A', body: 'my own' });
+  postBoard(cdb, { agentId: 'system', kind: 'ticket_ready', body: 'ready' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_opened', body: 'opened' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_updated', body: 'updated' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_merged', body: 'merged' });
+
+  assert.deepEqual(
+    listUnread(cdb, 'A').map((m) => m.body),
+    ['to A', 'to everyone'],
+  );
+  assert.equal(countUnread(cdb, 'A'), 2);
+  // system kinds are still readable through the normal read_board
+  assert.equal(readBoard(cdb, { kind: 'ticket_ready' }).messages.length, 1);
+});
+
+test('unread: a new agent starts directed at 0 and broadcast at the latest seq', () => {
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', kind: 'handoff', body: 'handoff before start' });
+  postBoard(cdb, { agentId: 'B', body: 'old broadcast' });
+
+  const cursor = getBoardCursor(cdb, 'A');
+  assert.deepEqual(cursor, { directed_seq: 0, broadcast_seq: 2 });
+  assert.deepEqual(
+    listUnread(cdb, 'A').map((m) => m.body),
+    ['handoff before start'],
+  );
+
+  // a broadcast after first sight is unread
+  postBoard(cdb, { agentId: 'B', body: 'new broadcast' });
+  assert.deepEqual(
+    listUnread(cdb, 'A').map((m) => m.body),
+    ['handoff before start', 'new broadcast'],
+  );
+  // the first-sight position does not move on later reads
+  assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 0, broadcast_seq: 2 });
+});
+
+test('consumeUnread: advances directed and broadcast separately and does not touch other agents', () => {
+  getBoardCursor(cdb, 'A');
+  getBoardCursor(cdb, 'C');
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd1' }); // seq 1
+  postBoard(cdb, { agentId: 'B', body: 'b1' }); // seq 2
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd2' }); // seq 3
+
+  assert.deepEqual(consumeUnread(cdb, 'A', { limit: 2 }).map((m) => m.body), ['d1', 'b1']);
+  assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 1, broadcast_seq: 2 });
+  assert.deepEqual(consumeUnread(cdb, 'A').map((m) => m.body), ['d2']);
+  assert.equal(countUnread(cdb, 'A'), 0);
+
+  // C's position is untouched; the broadcast is still unread for C
+  assert.deepEqual(getBoardCursor(cdb, 'C'), { directed_seq: 0, broadcast_seq: 0 });
+  assert.deepEqual(
+    listUnread(cdb, 'C').map((m) => m.body),
+    ['b1'],
+  );
+});
+
+test('board_cursors: adding the table to an existing DB seeds agents that ran at the latest seq, not workers that only received a handoff', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lockage-cursor-'));
+  const path = join(dir, 'db.sqlite');
+  try {
+    const first = openDb({ path, hostId: 'host-test' });
+    heartbeat(first, 'A'); // A ran (in agents)
+    postBoard(first, { agentId: 'B', toAgent: 'A', kind: 'question', body: 'old, long resolved' });
+    postBoard(first, { agentId: 'B', body: 'old broadcast' });
+    // W was handed a task but has not launched: it only appears as a to_agent
+    postBoard(first, { agentId: 'B', toAgent: 'W', kind: 'handoff', body: 'handoff to W' });
+    first.db.exec('DROP TABLE board_cursors'); // reproduce a DB from before this table
+    first.close();
+
+    const second = openDb({ path, hostId: 'host-test' });
+    // A (agents) and B (author) start at the latest seq: no old post floods in
+    for (const agent of ['A', 'B']) {
+      assert.deepEqual(getBoardCursor(second, agent), { directed_seq: 3, broadcast_seq: 3 }, agent);
+      assert.equal(countUnread(second, agent), 0, agent);
+    }
+    const w = second.db.prepare(`SELECT 1 FROM board_cursors WHERE agent_id = 'W'`).get();
+    assert.equal(w, undefined, 'W was seeded although it never ran');
+    // W starts like any newcomer: its handoff from before the upgrade is still unread
+    assert.deepEqual(listUnread(second, 'W').map((m) => m.body), ['handoff to W']);
+    postBoard(second, { agentId: 'B', toAgent: 'A', body: 'new for A' });
+    assert.deepEqual(consumeUnread(second, 'A').map((m) => m.body), ['new for A']);
+    second.close();
+
+    // reopening does not migrate again and the positions survive
+    const third = openDb({ path, hostId: 'host-test' });
+    assert.equal(countUnread(third, 'A'), 0, 'the read position survives a reopen');
+    assert.equal(countUnread(third, 'W'), 1);
+    third.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('heartbeat (own liveness) starts tracking broadcasts; a touchAgent:false heartbeat does not', () => {
+  postBoard(cdb, { agentId: 'B', body: 'before anyone' });
+  heartbeat(cdb, 'A');
+  heartbeat(cdb, 'W', { touchAgent: false }); // e.g. handoff_task to a worker not launched yet
+  postBoard(cdb, { agentId: 'B', body: 'after A appeared' });
+  assert.deepEqual(listUnread(cdb, 'A').map((m) => m.body), ['after A appeared']);
+  const w = cdb.db.prepare(`SELECT 1 FROM board_cursors WHERE agent_id = 'W'`).get();
+  assert.equal(w, undefined, 'W got a read position before it launched');
+});
+
+// ---- wait_for_unblock from the stored read position ----
+
+const quickWait = (agentId: string, timeoutSec = 1) =>
+  waitForUnblock(cdb, { agentId, timeoutSec, pollMs: 20 });
+
+test('wait_for_unblock: a directed post that arrived while not waiting wakes the next wait (problem 1)', async () => {
+  assert.equal((await quickWait('A')).woke_by, 'timeout');
+  // A is "working" (not waiting) when B posts
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', kind: 'question', body: 'please check' });
+  const r = await quickWait('A');
+  assert.equal(r.woke_by, 'board');
+  assert.deepEqual(
+    (r.payload as BoardMessage[]).map((m) => m.body),
+    ['please check'],
+  );
+});
+
+test('wait_for_unblock: a broadcast between a timeout and the re-call still wakes', async () => {
+  assert.equal((await quickWait('A')).woke_by, 'timeout');
+  postBoard(cdb, { agentId: 'B', body: 'to everyone' });
+  const r = await quickWait('A');
+  assert.equal(r.woke_by, 'board');
+  assert.equal((r.payload as BoardMessage[])[0]?.body, 'to everyone');
+});
+
+test('wait_for_unblock: a post already returned does not wake the next wait', async () => {
+  getBoardCursor(cdb, 'A');
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'once' });
+  assert.equal((await quickWait('A')).woke_by, 'board');
+  assert.equal((await quickWait('A')).woke_by, 'timeout');
+  assert.equal(countUnread(cdb, 'A'), 0);
+});
+
+test('wait_for_unblock: a directed post before the agent ever appeared wakes its first wait (pre-start handoff)', async () => {
+  postBoard(cdb, { agentId: 'B', body: 'old broadcast' });
+  postBoard(cdb, { agentId: 'A', toAgent: 'W', kind: 'handoff', body: 'task handed to W' });
+  const r = await quickWait('W');
+  assert.equal(r.woke_by, 'board');
+  assert.deepEqual(
+    (r.payload as BoardMessage[]).map((m) => m.body),
+    ['task handed to W'],
+  );
+});
+
+test('wait_for_unblock: system kinds and my own posts do not wake', async () => {
+  getBoardCursor(cdb, 'A');
+  postBoard(cdb, { agentId: 'A', body: 'my own note' });
+  postBoard(cdb, { agentId: 'system', kind: 'ticket_ready', body: 'ready' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_opened', body: 'opened' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_updated', body: 'updated' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_merged', body: 'merged' });
+  assert.equal((await quickWait('A')).woke_by, 'timeout');
+});
+
+test('wait_for_unblock: a post plus a leftover board wake (old DB) wakes only once (problem 2)', async () => {
+  const p = waitForUnblock(cdb, { agentId: 'A', timeoutSec: 3, pollMs: 20 });
+  setTimeout(() => {
+    postBoard(cdb, { agentId: 'B', toAgent: 'A', kind: 'handoff', body: 'handoff' });
+    wake(cdb, 'A', 'board', { reason: 'handoff' }); // what the old handoff_task also stacked
+  }, 60);
+  assert.equal((await p).woke_by, 'board');
+  assert.equal((await quickWait('A')).woke_by, 'timeout', 'the leftover board wake woke A again');
+});
+
+test('wait_for_unblock: a leftover board wake alone (old DB) is still honored', async () => {
+  getBoardCursor(cdb, 'A');
+  wake(cdb, 'A', 'board', { reason: 'merge_needs_review' });
+  const r = await quickWait('A');
+  assert.equal(r.woke_by, 'board');
+  assert.deepEqual(r.payload, [{ reason: 'merge_needs_review' }]);
+});
+
+// ---- heartbeat preview / read_board(unread_only) ----
+
+test('summarizeUnread: the count and the newest 3 unread as short previews, without advancing the read position', () => {
+  getBoardCursor(cdb, 'A');
+  const task = createTask(cdb, { repo: 'r', title: 't' });
+  for (let i = 1; i <= 4; i++) postBoard(cdb, { agentId: 'B', toAgent: 'A', body: `m${i}` });
+  postBoard(cdb, {
+    agentId: 'B',
+    kind: 'question',
+    body: 'x'.repeat(100),
+    refTaskId: task.id,
+  });
+
+  const { unread_count, unread_preview: p } = summarizeUnread(cdb, 'A');
+  assert.equal(unread_count, 5);
+  assert.deepEqual(
+    p.map((m) => m.seq),
+    [3, 4, 5],
+  );
+  assert.equal(p[2]?.kind, 'question');
+  assert.equal(p[2]?.ref_task_id, task.id);
+  assert.equal(p[2]?.body_head, `${'x'.repeat(80)}…`);
+  assert.equal(p[0]?.body_head, 'm3');
+  assert.equal(countUnread(cdb, 'A'), 5, 'the summary does not mark anything read');
+});
+
+test('readUnread: returns only unread, marks them read, and is empty when called again', () => {
+  getBoardCursor(cdb, 'A');
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'to A' });
+  postBoard(cdb, { agentId: 'B', body: 'to everyone' });
+  postBoard(cdb, { agentId: 'A', body: 'my own' });
+  postBoard(cdb, { agentId: 'system', kind: 'ticket_ready', body: 'ready' });
+
+  assert.deepEqual(
+    readUnread(cdb, 'A').messages.map((m) => m.body),
+    ['to A', 'to everyone'],
+  );
+  assert.deepEqual(readUnread(cdb, 'A').messages, []);
+  // the normal read still returns everything
+  assert.equal(readBoard(cdb).messages.length, 4);
+});
+
+test('readUnread: limit returns the oldest unread first and leaves the rest unread', () => {
+  getBoardCursor(cdb, 'A');
+  for (let i = 1; i <= 3; i++) postBoard(cdb, { agentId: 'B', toAgent: 'A', body: `m${i}` });
+  assert.deepEqual(
+    readUnread(cdb, 'A', { limit: 2 }).messages.map((m) => m.body),
+    ['m1', 'm2'],
+  );
+  assert.deepEqual(
+    readUnread(cdb, 'A').messages.map((m) => m.body),
+    ['m3'],
+  );
+});
+
+
+/** Run an ES module snippet in a separate node process that can import the TypeScript sources. */
+function spawnTs(script: string) {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  return spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { cwd: root });
+}
+
+/** Collect a spawned process's stdout as JSON, or reject with its stderr. */
+function jsonOut<T>(p: ReturnType<typeof spawnTs>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let out = '';
+    let err = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('close', (code) => (code === 0 ? resolve(JSON.parse(out) as T) : reject(new Error(err))));
+  });
+}
+
+// ---- consuming unread: paging and concurrency ----
+
+test('consumeUnread: a limit boundary across directed and broadcast leaves the rest unread', () => {
+  getBoardCursor(cdb, 'A');
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd1' }); // seq 1
+  postBoard(cdb, { agentId: 'B', body: 'b1' }); // seq 2
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd2' }); // seq 3
+  postBoard(cdb, { agentId: 'B', body: 'b2' }); // seq 4
+  assert.deepEqual(consumeUnread(cdb, 'A', { limit: 3 }).map((m) => m.body), ['d1', 'b1', 'd2']);
+  assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 3, broadcast_seq: 2 });
+  assert.deepEqual(consumeUnread(cdb, 'A', { limit: 3 }).map((m) => m.body), ['b2']);
+});
+
+test('wait_for_unblock: more unread than the return limit comes back over several calls', async () => {
+  getBoardCursor(cdb, 'A');
+  for (let i = 1; i <= UNREAD_RETURN_LIMIT + 1; i++) {
+    postBoard(cdb, { agentId: 'B', toAgent: 'A', body: `m${i}` });
+  }
+  const first = await waitForUnblock(cdb, { agentId: 'A', timeoutSec: 1, pollMs: 20 });
+  assert.equal((first.payload as BoardMessage[]).length, UNREAD_RETURN_LIMIT);
+  const second = await waitForUnblock(cdb, { agentId: 'A', timeoutSec: 1, pollMs: 20 });
+  assert.deepEqual(
+    (second.payload as BoardMessage[]).map((m) => m.body),
+    [`m${UNREAD_RETURN_LIMIT + 1}`],
+  );
+});
+
+test('wait_for_unblock: waking on a post drains every leftover board wake, whatever its payload', async () => {
+  getBoardCursor(cdb, 'A');
+  wake(cdb, 'A', 'board', { reason: 'handoff', task_id: 't1' });
+  wake(cdb, 'A', 'board', { reason: 'merge_needs_review', task: 't2' });
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'post' });
+  assert.equal((await waitForUnblock(cdb, { agentId: 'A', timeoutSec: 1, pollMs: 20 })).woke_by, 'board');
+  assert.deepEqual(takePendingWakes(cdb, 'A', 'board'), []);
+});
+
+test('consumeUnread: processes consuming the same agent concurrently never get the same post twice', async () => {
+  // Real separate processes on one ledger file, each taking 1 post at a time until none is left.
+  const dir = mkdtempSync(join(tmpdir(), 'lockage-consume-'));
+  const path = join(dir, 'db.sqlite');
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const POSTS = 40;
+  try {
+    const setup = openDb({ path, hostId: 'host-test' });
+    getBoardCursor(setup, 'A');
+    for (let i = 1; i <= POSTS; i++) postBoard(setup, { agentId: 'B', toAgent: 'A', body: `m${i}` });
+    setup.close();
+
+    const script = `
+      const { openDb } = await import(${JSON.stringify(join(root, 'src/db/index.ts'))});
+      const { consumeUnread } = await import(${JSON.stringify(join(root, 'src/lockage/board.ts'))});
+      const cdb = openDb({ path: ${JSON.stringify(path)}, hostId: 'host-test' });
+      const got = [];
+      for (;;) {
+        const m = consumeUnread(cdb, 'A', { limit: 1 });
+        if (m.length === 0) break;
+        got.push(m[0].seq);
+      }
+      cdb.close();
+      process.stdout.write(JSON.stringify(got));
+    `;
+    const run = () => jsonOut<number[]>(spawnTs(script));
+    const results = await Promise.all([run(), run(), run(), run()]);
+    const all = results.flat().sort((a, b) => a - b);
+    assert.deepEqual(all, Array.from({ length: POSTS }, (_, i) => i + 1), 'a post was returned twice or lost');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('migrateBoardCursors: a seed that fails leaves no table behind, so the next open retries', () => {
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'old' });
+  cdb.db.exec('DROP TABLE board_cursors');
+  // an agents table the seed cannot read makes the seed throw after the CREATE ran
+  cdb.db.exec('DROP TABLE agents');
+  cdb.db.exec('CREATE TABLE agents (name TEXT)');
+  const schema = readFileSync(join(fileURLToPath(new URL('..', import.meta.url)), 'src/db/schema.sql'), 'utf8');
+  assert.throws(() => migrateBoardCursors(cdb.db, schema));
+  const table = cdb.db.prepare(`SELECT 1 FROM sqlite_master WHERE name = 'board_cursors'`).get();
+  assert.equal(table, undefined, 'board_cursors survived a failed seed');
+});
+
+test('migrateBoardCursors: a ledger without an agents table seeds board authors only', () => {
+  postBoard(cdb, { agentId: 'B', toAgent: 'W', kind: 'handoff', body: 'to W' });
+  cdb.db.exec('DROP TABLE board_cursors');
+  cdb.db.exec('DROP TABLE agents');
+  const schema = readFileSync(join(fileURLToPath(new URL('..', import.meta.url)), 'src/db/schema.sql'), 'utf8');
+  migrateBoardCursors(cdb.db, schema);
+  const rows = cdb.db.prepare(`SELECT agent_id FROM board_cursors ORDER BY agent_id`).all();
+  assert.deepEqual(rows.map((r: any) => r.agent_id), ['B']);
+  migrateBoardCursors(cdb.db, schema); // a second call is a no-op
+  assert.equal(cdb.db.prepare(`SELECT COUNT(*) AS n FROM board_cursors`).get()?.n, 1);
+});
+
+// A smoke test: the race window is a few milliseconds and the child processes start at slightly
+// different times, so this passing does not prove the migration is atomic (the two tests above do the
+// deterministic part). It guards against a gross regression such as seeding after other work.
+test('board_cursors migration: processes opening a pre-upgrade ledger at once seed it exactly once', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lockage-migrate-'));
+  const path = join(dir, 'db.sqlite');
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  try {
+    const setup = openDb({ path, hostId: 'host-test' });
+    heartbeat(setup, 'A');
+    for (let i = 1; i <= 5; i++) postBoard(setup, { agentId: 'B', toAgent: 'A', body: `old ${i}` });
+    setup.db.exec('DROP TABLE board_cursors');
+    setup.close();
+
+    // each process opens the ledger and asks for A's unread right away (which would create A's row
+    // at directed 0 if it ran before the seed)
+    const script = `
+      const { openDb } = await import(${JSON.stringify(join(root, 'src/db/index.ts'))});
+      const { countUnread } = await import(${JSON.stringify(join(root, 'src/lockage/board.ts'))});
+      const cdb = openDb({ path: ${JSON.stringify(path)}, hostId: 'host-test' });
+      const n = countUnread(cdb, 'A');
+      cdb.close();
+      process.stdout.write(JSON.stringify(n));
+    `;
+    const counts = await Promise.all([1, 2, 3, 4].map(() => jsonOut<number>(spawnTs(script))));
+    assert.deepEqual(counts, [0, 0, 0, 0], 'A saw old posts as unread: the seed raced');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

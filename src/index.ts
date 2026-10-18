@@ -75,8 +75,10 @@ import { acquirePublishLock, releasePublishLock } from './lockage/publish-lock.j
 import {
   postBoard,
   readBoard,
+  readUnread,
+  summarizeUnread,
+  getBoardCursor,
   resolveQuestion,
-  wake,
   waitForUnblock,
   computePublisherStatus,
 } from './lockage/board.js';
@@ -175,7 +177,7 @@ export function buildServer(
     'create_task',
     {
       description:
-        'Create a task. Right after creation it is open and unassigned. ticket_id is optional (you can also create minor tasks not tied to a ticket). This task does not become ready until every task passed in depends_on is done. If the dependencies form a cycle, returns {ok:false, reason:"cycle"}.',
+        'Create a task. Right after creation it is open and unassigned. ticket_id is optional (you can also create minor tasks not tied to a ticket). This task does not become ready until every task passed in depends_on is done. depends_on cannot form a cycle (the new task only gains incoming edges), so a redundant dependency such as depending on both A and a task that already depends on A is accepted.',
       inputSchema: {
         repo: z.string().describe('target repo identifier'),
         title: z.string(),
@@ -349,16 +351,15 @@ export function buildServer(
         fromAgent: a.from_agent,
         toAgent: a.to_agent,
       });
-      // Only when the move is committed do we leave a trace on the board and wake to_agent (point B).
+      // Only when the move is committed do we leave a trace on the board, which wakes to_agent (point B).
       // handoffTask opens BEGIN IMMEDIATE internally, so to avoid a nested BEGIN we do the board
       // integration after success is confirmed (the atomicity of the state reassignment and the
       // notification are separate concerns).
       //   - post_board(kind='handoff', author=from, to_agent=to, ref_task_id): the arriving to_agent
       //     learns it was handed the task and can trace the predecessor's question via ref (D-3's
       //     directed board notification).
-      //   - wake(to, 'board'): immediately wake a to_agent waiting in wait_for_unblock (it would also
-      //     be caught by the board_messages seq diff, but this insures against a miss before the
-      //     long-poll starts; same style as needs_review).
+      //   No separate board wake: the handoff is unread for to_agent (directed posts count from seq 0
+      //   even before it has a read position), so its first wait_for_unblock returns on it.
       if (r.ok) {
         postBoard(cdb, {
           agentId: a.from_agent,
@@ -368,7 +369,6 @@ export function buildServer(
           body: `Handed task ${a.task_id} over from ${a.from_agent}. worktree: ${r.worktrees.join(', ') || '(none)'
             }. Check the stuck reason the predecessor left via read_board(kind='question', ref_task_id).`,
         });
-        wake(cdb, a.to_agent, 'board', { reason: 'handoff', task_id: a.task_id });
       }
       return ok(r);
     },
@@ -378,7 +378,7 @@ export function buildServer(
     'task_done',
     {
       description:
-        'Complete a task and hand it to the merge gate. Call it after committing your work in the worktree. A task with a ticket_id merges to the ticket\'s integration branch (lockage/ticket/<short id>); a task with no ticket_id (also when task_id is omitted) merges to the base branch. If a conflict looks likely, it does not merge and returns needs_review (each element\'s contested lists the files that would conflict; the task stays in_progress) — resolve in the worktree and call again. For a worktree_path you are not assigned, a branch equal to base, or a task not assigned to you, it changes nothing and returns {ok:false, reason:"no_active_worktree"|"branch_is_base"|"not_assignee"}. For a lease-expired task (heartbeat lapsed, so the task went back to unassigned), if your assignment is tied to that task it re-claims and continues (rescue). not_assignee means the task is not yours (another agent owns it, or the worktree assignment is not tied to that task and is not eligible for rescue), and repeating the same call will not succeed — check with list_tasks, and if another agent owns it, do not steal it; move to another task. If it is unassigned/open, confirm the task_id + worktree_path pair is your own work, then claim_task with the list_tasks version as expected_version and call task_done again. If the rescue re-claim loses a race and the task is still unassigned, returns {ok:false, reason:"lease_expired"}, so wait a few seconds and call again (retry at most 3 times after the first call). If it is still lease_expired, check with list_tasks: if unassigned/open, do the same as not_assignee — claim_task then call task_done (on conflict, start over from list_tasks). If another agent owns it, do not steal it; move to another task. Otherwise leave a question and stop (block_task only works when the task is yours and in_progress). When all of a ticket\'s tasks are done, ticket_ready is emitted automatically. PRs are created by lockage-publish (a CLI, not an MCP tool; not resident): after you set the ticket\'s last task to done, confirm it appears as awaiting PR via publisher_status, then run lockage-publish --repo-path <repo absolute path> --ticket <ticket_id>. gh pr create is not used.',
+        'Complete a task and hand it to the merge gate. Call it after committing your work in the worktree. A task with a ticket_id merges to the ticket\'s integration branch (lockage/ticket/<short id>); a task with no ticket_id (also when task_id is omitted) merges to the base branch. If a conflict looks likely, it does not merge and returns needs_review (each element\'s contested lists the files that would conflict; the task stays in_progress) — resolve in the worktree and call again. Your own send-back is only returned here, not also posted to your board; another agent\'s item sent back during this call is posted to that agent as a handoff from system. For a worktree_path you are not assigned, a branch equal to base, or a task not assigned to you, it changes nothing and returns {ok:false, reason:"no_active_worktree"|"branch_is_base"|"not_assignee"}. For a lease-expired task (heartbeat lapsed, so the task went back to unassigned), if your assignment is tied to that task it re-claims and continues (rescue). not_assignee means the task is not yours (another agent owns it, or the worktree assignment is not tied to that task and is not eligible for rescue), and repeating the same call will not succeed — check with list_tasks, and if another agent owns it, do not steal it; move to another task. If it is unassigned/open, confirm the task_id + worktree_path pair is your own work, then claim_task with the list_tasks version as expected_version and call task_done again. If the rescue re-claim loses a race and the task is still unassigned, returns {ok:false, reason:"lease_expired"}, so wait a few seconds and call again (retry at most 3 times after the first call). If it is still lease_expired, check with list_tasks: if unassigned/open, do the same as not_assignee — claim_task then call task_done (on conflict, start over from list_tasks). If another agent owns it, do not steal it; move to another task. Otherwise leave a question and stop (block_task only works when the task is yours and in_progress). When all of a ticket\'s tasks are done, ticket_ready is emitted automatically. PRs are created by lockage-publish (a CLI, not an MCP tool; not resident): after you set the ticket\'s last task to done, confirm it appears as awaiting PR via publisher_status, then run lockage-publish --repo-path <repo absolute path> --ticket <ticket_id>. gh pr create is not used.',
       inputSchema: {
         agent_id: z.string(),
         worktree_path: z.string(),
@@ -388,6 +388,8 @@ export function buildServer(
       },
     },
     async (a) => {
+      // These do not piggyback heartbeat, so start tracking the caller's board unread here too.
+      getBoardCursor(cdb, a.agent_id);
       // Issue #52: before running task_done (= while the worktree is still active), recompute dirty
       // from the worktree's git state and capture files outside the claim glob as unclaimed. Since
       // onTaskDone clears that worktree's dirty set on a successful merge, this computation must
@@ -412,7 +414,7 @@ export function buildServer(
     'heartbeat',
     {
       description:
-        'Signal that you are alive and extend the lease on the tasks and claims you hold (task lease is 15 minutes). Calling claim_task, release_task, claim_files, publish_dirty, resolve_question, assign_worktree, or wait_for_unblock also extends it, but post_board, task_done, release_claim, release_worktree, etc. do not, so call this at intervals shorter than 15 minutes while working (around 10 minutes). Passing task_id extends only that task. It also auto-computes changes (dirty) in your assigned worktree, returning overlaps if they overlap another agent\'s dirty or claims, and files changed outside your claim glob as unclaimed.',
+        'Signal that you are alive and extend the lease on the tasks and claims you hold (task lease is 15 minutes). Calling claim_task, release_task, claim_files, publish_dirty, resolve_question, assign_worktree, or wait_for_unblock also extends it, but post_board, task_done, release_claim, release_worktree, etc. do not, so call this at intervals shorter than 15 minutes while working (around 10 minutes). Passing task_id extends only that task. It also auto-computes changes (dirty) in your assigned worktree, returning overlaps if they overlap another agent\'s dirty or claims, and files changed outside your claim glob as unclaimed. It also returns unread_count (board posts to you or to everyone that you have not read; your own posts and ticket_ready / pr_* are not counted) and unread_preview (the newest 3: seq, author, kind, body_head, ref_task_id) without marking them read. When unread_count > 0, read them with read_board(agent_id, unread_only:true) at the next break and handle question and handoff first in what it returns.',
       inputSchema: { agent_id: z.string(), task_id: z.string().optional() },
     },
     async (a) => {
@@ -424,6 +426,8 @@ export function buildServer(
         overlaps: rc.overlaps,
         wake_targets: rc.wake_targets,
         unclaimed: rc.unclaimed,
+        // Lets a working agent notice posts without waiting; reading them is left to read_board.
+        ...summarizeUnread(cdb, a.agent_id),
       });
     },
   );
@@ -603,7 +607,10 @@ export function buildServer(
         'Release a file claim (only the declarer may call it). Claims tied to a task are released by task_done, release_task, and PR post-merge cleanup, so you usually need not call this. Release claims not tied to a task with this (even if you do not, they are reclaimed on expiry after heartbeat stops).',
       inputSchema: { claim_id: z.string(), agent_id: z.string() },
     },
-    async (a) => ok(releaseClaim(cdb, a.claim_id, a.agent_id)),
+    async (a) => {
+      getBoardCursor(cdb, a.agent_id); // no heartbeat piggyback here: start tracking board unread
+      return ok(releaseClaim(cdb, a.claim_id, a.agent_id));
+    },
   );
 
   server.registerTool(
@@ -682,7 +689,7 @@ export function buildServer(
     'post_board',
     {
       description:
-        'Post to the shared board. Specifying to_agent addresses it to that peer. An agent waiting in wait_for_unblock wakes on posts addressed to it or to everyone (regardless of kind). Attach the target task to a question via ref_task_id. ticket_ready is posted by the server; pr_opened, pr_updated, and pr_merged are posted by lockage-publish.',
+        'Post to the shared board. Specifying to_agent addresses it to that peer. The recipient (or everyone else, when to_agent is omitted) sees it as unread: it wakes their next wait_for_unblock even if they were not waiting when you posted, and is counted in their heartbeat unread_count. Your own posts and ticket_ready / pr_* never count as unread. Attach the target task to a question via ref_task_id. ticket_ready is posted by the server; pr_opened, pr_updated, and pr_merged are posted by lockage-publish.',
       inputSchema: {
         agent_id: z.string(),
         body: z.string(),
@@ -694,8 +701,11 @@ export function buildServer(
         ref_ticket_id: z.string().nullable().optional(),
       },
     },
-    async (a) =>
-      ok(
+    async (a) => {
+      // The post that names an agent at startup is often its first call carrying agent_id: start
+      // tracking its unread from here (before the insert, so the agent's own post never counts).
+      getBoardCursor(cdb, a.agent_id);
+      return ok(
         postBoard(cdb, {
           agentId: a.agent_id,
           body: a.body,
@@ -704,26 +714,37 @@ export function buildServer(
           refTaskId: a.ref_task_id ?? null,
           refTicketId: a.ref_ticket_id ?? null,
         }),
-      ),
+      );
+    },
   );
 
   server.registerTool(
     'read_board',
     {
       description:
-        'Read the board. Passing the last-read seq as since returns only the diff. Passing to_agent returns posts addressed to you and to everyone. Filter by kind (ticket_ready = tickets ready to become a PR; pr_opened, pr_updated, pr_merged = records from lockage-publish). unresolved_only=true excludes resolved questions (kinds other than question are still returned, so combine with kind="question" to see only unresolved questions).',
+        'Read the board. Passing the last-read seq as since returns only the diff. Passing to_agent returns posts addressed to you and to everyone. Filter by kind (ticket_ready = tickets ready to become a PR; pr_opened, pr_updated, pr_merged = records from lockage-publish). unresolved_only=true excludes resolved questions (kinds other than question are still returned, so combine with kind="question" to see only unresolved questions). unread_only=true with agent_id returns only your unread posts (to you or to everyone, from where you last read; your own posts and ticket_ready / pr_* excluded; at most 100 unless limit is given) and marks them read; it cannot be combined with since / to_agent / kind / unresolved_only.',
       inputSchema: {
+        agent_id: z.string().optional().describe('required with unread_only'),
+        unread_only: z.boolean().optional(),
         since: z.number().int().optional(),
         to_agent: z.string().optional(),
         kind: z
           .enum(['note', 'handoff', 'question', 'ticket_ready', 'pr_opened', 'pr_updated', 'pr_merged'])
           .optional(),
-        limit: z.number().int().optional(),
+        limit: z.number().int().min(1).optional(),
         unresolved_only: z.boolean().optional(),
       },
     },
-    async (a) =>
-      ok(
+    async (a) => {
+      if (a.unread_only) {
+        if (!a.agent_id) return fail('unread_only requires agent_id');
+        // Marking read moves past every returned seq, so a narrower filter would skip unread posts.
+        if (a.since !== undefined || a.to_agent || a.kind || a.unresolved_only) {
+          return fail('unread_only cannot be combined with since / to_agent / kind / unresolved_only');
+        }
+        return ok(readUnread(cdb, a.agent_id, { limit: a.limit }));
+      }
+      return ok(
         readBoard(cdb, {
           since: a.since,
           toAgent: a.to_agent,
@@ -731,7 +752,8 @@ export function buildServer(
           limit: a.limit,
           unresolvedOnly: a.unresolved_only,
         }),
-      ),
+      );
+    },
   );
 
   server.registerTool(
@@ -793,15 +815,17 @@ export function buildServer(
         keep_branch: z.boolean().optional(),
       },
     },
-    async (a) =>
-      ok(
+    async (a) => {
+      getBoardCursor(cdb, a.agent_id); // no heartbeat piggyback here: start tracking board unread
+      return ok(
         releaseWorktree(cdb, {
           agentId: a.agent_id,
           worktreePath: a.worktree_path,
           repoPath: a.repo_path,
           keepBranch: a.keep_branch,
         }),
-      ),
+      );
+    },
   );
 
   server.registerTool(
@@ -962,7 +986,7 @@ export function buildServer(
     'wait_for_unblock',
     {
       description:
-        'Wait once until one of the following happens: a task you are waiting on becomes ready; a board post addressed to you or to everyone (regardless of kind); an overlap with another agent; or timeout. Returns what woke you via woke_by. Use it instead of repeatedly polling lists.',
+        'Wait once until one of the following happens: a task you are waiting on becomes ready; an unread board post addressed to you or to everyone; an overlap with another agent; or timeout. Returns what woke you via woke_by. Unread is counted from where you last read, so a post that arrived while you were working or between waits still wakes you; the returned posts are then marked read. Posts addressed to you count from the start even before your first call (e.g. a handoff_task to you before you launched), posts to everyone from your first lockage call made as yourself (e.g. the post_board that names you; block_task / resume_task / handoff_task do not count, as they may be called on your behalf). At most 100 posts per call; the rest wake the next call. Your own posts and ticket_ready / pr_opened / pr_updated / pr_merged do not wake you (read_board still returns them). Use it instead of repeatedly polling lists.',
       inputSchema: {
         agent_id: z.string(),
         task_id: z.string().optional().describe('the task whose dependency resolution you are waiting for'),

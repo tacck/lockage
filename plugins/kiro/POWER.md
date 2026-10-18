@@ -59,7 +59,7 @@ from the agents (the `publisher` set is enabled by `lockage-publish` itself, so 
 
 | Tool | Role |
 |---|---|
-| `create_task` | Create a task (`ticket_id` optional, set dependencies with `depends_on`. Cycles rejected) |
+| `create_task` | Create a task (`ticket_id` optional, set dependencies with `depends_on`. The new task only gains incoming edges, so no cycle can form) |
 | `add_dependency` | Set a dependency (blocks) between existing tasks (`from_task` blocks `to_task`. Cycles rejected) |
 | `list_tasks` | List tasks (with the `version` to pass to claim. Filter by `status`/`assignee`/`ticket_id`/`repo`. Unassigned is `status:"open"`. `ready_only` for only dependency-resolved. For `status:"blocked"` it attaches material for judging orphans) |
 | `claim_task` | Atomically claim a task (CAS. A conflict returns `conflict` and does not block) |
@@ -68,7 +68,7 @@ from the agents (the `publisher` set is enabled by `lockage-publish` itself, so 
 | `resume_task` | The same agent resumes on a human's "continue" instruction (`blocked`→`in_progress`) |
 | `handoff_task` | Transfer a `blocked` task to another worker as a whole worktree unit (only on explicit human instruction) |
 | `task_done` | Complete a task and send it to the integration merge gate (on success `done`) |
-| `heartbeat` | Report liveness to extend the lease of a task/claim, and auto-compute the worktree's dirty |
+| `heartbeat` | Report liveness to extend the lease of a task/claim, and auto-compute the worktree's dirty. Also returns `unread_count` / `unread_preview` (newest 3 unread board posts) without marking them read |
 
 ### Ticket operations
 
@@ -94,8 +94,8 @@ from the agents (the `publisher` set is enabled by `lockage-publish` itself, so 
 
 | Tool | Role |
 |---|---|
-| `post_board` | Post to the shared board (specify `to_agent` for a directed handoff) |
-| `read_board` | Read the board (incremental fetch with a `since` cursor. To see only unresolved questions, `kind:"question", unresolved_only:true`) |
+| `post_board` | Post to the shared board (specify `to_agent` for a directed handoff). The post becomes unread for its recipient (or for everyone else, without `to_agent`) |
+| `read_board` | Read the board (incremental fetch with a `since` cursor. To see only unresolved questions, `kind:"question", unresolved_only:true`). `agent_id` + `unread_only:true` returns only your unread posts (100 by default, changeable with `limit`) and marks them read; it cannot be combined with `since` / `to_agent` / `kind` / `unresolved_only` |
 | `resolve_question` | Mark a question resolved (a complement to auto-resolution. Idempotent) |
 
 ### worktree
@@ -116,7 +116,7 @@ from the agents (the `publisher` set is enabled by `lockage-publish` itself, so 
 
 | Tool | Role |
 |---|---|
-| `wait_for_unblock` | Block with a long-poll until one of "dependency ready/board addressed to you or to all/overlap/timeout" and return the reason |
+| `wait_for_unblock` | Block with a long-poll until one of "dependency ready/unread board post addressed to you or to all/overlap/timeout" and return the reason. Posts that arrived while you were not waiting also wake it; returned posts are marked read |
 
 > **`lockage-publish` is a CLI command, not an MCP tool** (bin: `dist/launcher/publish-cli.js`).
 > It is not included in the table above. To publish a PR, invoke `lockage-publish --repo-path <absolute path> --ticket <ticket_id>` with Bash and the like

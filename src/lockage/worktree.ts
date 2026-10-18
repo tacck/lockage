@@ -161,12 +161,20 @@ export function assignWorktree(
   // canonicalPath (normalized). However, for a new assignment where the physical worktree does not exist
   // yet, realpathSync fails, so here we query with the un-normalized path and re-check with the normalized
   // path after the physical worktree is created.
-  const existing = db
-    .prepare(
-      `SELECT * FROM worktree_assignments
-        WHERE agent_id = ? AND worktree_path = ? AND status = 'active' LIMIT 1`,
-    )
-    .get(args.agentId, path) as WorktreeAssignment | undefined;
+  const findActive = (p: string) =>
+    db
+      .prepare(
+        `SELECT * FROM worktree_assignments
+          WHERE agent_id = ? AND worktree_path = ? AND status = 'active' LIMIT 1`,
+      )
+      .get(args.agentId, p) as WorktreeAssignment | undefined;
+  // When the physical worktree already exists, also look up by its realpath here, before the fetch below.
+  // Rows saved since #41 hold the normalized path, so if dirname(repoPath) goes through a symlink (macOS
+  // tmpdir: /var → /private/var) the un-normalized lookup alone misses, the remote-follow fetch runs, and
+  // only the post-creation canonicalPath re-check returns reused=true — breaking Issue #8's "no fetch on
+  // the reuse path". existsSync guards normalizePath so a not-yet-created path does not log a warning.
+  const existing =
+    findActive(path) ?? (existsSync(path) ? findActive(normalizePath(path)) : undefined);
   if (existing) {
     // #41 follow-up (review finding #2): when reusing an old ledger row (saved un-normalized before #41),
     // if the return value stays un-normalized, downstream exact-match comparisons on worktree_path diverge
