@@ -99,6 +99,10 @@ For work that falls under the top of AGENTS.md's "When the user instructs you no
 □ Call heartbeat(agent_id, task_id) periodically
   → on every commit, and at the latest every 10 minutes (a task's lease is 15 minutes)
   → do not stop it while you continue non-lockage work (build, test, etc.)
+□ Look at heartbeat's unread_count
+  → if > 0, at the next break read_board(agent_id, unread_only:true) (marks them read)
+  → read question and handoff first (unread_preview shows the newest 3: seq / author / kind / body_head / ref_task_id)
+  → your own posts and ticket_ready / pr_* are not counted
 □ git commit at each break (on the worktree)
 ```
 
@@ -277,6 +281,13 @@ Omit `ttl_sec` (default 8 hours). Do not omit `task_id`.
 {}
 ```
 
+### read_board (unread only)
+```json
+{ "agent_id": "<agent_id>", "unread_only": true }
+```
+
+Returns only your unread posts and marks them read. Do not combine with `since` / `to_agent` / `kind` / `unresolved_only`.
+
 ## Common failures and handling
 
 | Failure | Cause | Handling |
@@ -287,4 +298,5 @@ Omit `ttl_sec` (default 8 hours). Do not omit `task_id`.
 | `lockage-publish` is `published: []` | not all tasks are done (not shown in pending) | confirm the remaining tasks with `list_tasks`. Set the open task to done first |
 | it is in `publisher_status`'s `pending_tickets` yet `published: []` | `lockage-publish` is looking at a different ledger from the MCP server (`lockage-publish` does not receive the MCP registration's `env.LOCKAGE_DB`) | add `--db <absolute path to the ledger>`, or set the shell environment variable `LOCKAGE_DB` to the same path as the MCP registration. The ledger path is in the MCP registration (the client's MCP config `env.LOCKAGE_DB`; the default `~/.lockage/lockage.sqlite` if none). If you cannot read the config, ask the user |
 | `publish_dirty`'s `overlaps` has another agent | another agent is editing the same file | contact the party with `post_board` and coordinate |
+| `heartbeat`'s `unread_count` stays > 0 | the unread posts were reported but not read (heartbeat does not mark read) | read them with `read_board(agent_id, unread_only:true)`. It cannot be combined with `since` / `to_agent` / `kind` / `unresolved_only` (returns an error) |
 | cannot move into the worktree | an environment where CWD cannot be changed | ask the user with `post_board(kind:"question")`. Do not start on the mainline (except for work the user instructed to do without lockage) |
