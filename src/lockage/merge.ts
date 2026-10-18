@@ -75,7 +75,7 @@ export interface NeedsReviewEntry {
 export interface ProcessResult {
   merged: MergedEntry[];
   needs_review: NeedsReviewEntry[];
-  /** Peers notified of needs_review via A2A wake (kind='board') + board handoff. */
+  /** Peers notified: needs_review via a board handoff, unblocked downstream via a task_ready wake. */
   wake_targets: string[];
 }
 
@@ -539,7 +539,10 @@ export function processMergeQueue(cdb: CoordDb): ProcessResult {
   return { merged, needs_review: needsReview, wake_targets: [...wakeTargets] };
 }
 
-/** Notify the assignee of needs_review via board handoff + A2A wake (§4.6). */
+/**
+ * Notify the assignee of needs_review via a board handoff (§4.6). No separate board wake: the post is
+ * unread for the assignee, so its wait_for_unblock returns on it (a wake on top made it return twice).
+ */
 function notifyNeedsReview(
   cdb: CoordDb,
   item: MergeQueueRow,
@@ -555,12 +558,6 @@ function notifyNeedsReview(
     toAgent: item.agent_id,
     body,
     refTaskId: item.task_id,
-  });
-  wake(cdb, item.agent_id, 'board', {
-    reason: error ? 'merge_failed' : 'merge_needs_review',
-    task: item.task_id,
-    contested,
-    error,
   });
 }
 

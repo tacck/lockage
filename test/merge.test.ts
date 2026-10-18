@@ -24,7 +24,7 @@ import {
   tryImmediateMerge,
   listMergeQueue,
 } from '../src/lockage/merge.js';
-import { postBoard, readBoard } from '../src/lockage/board.js';
+import { postBoard, readBoard, listUnread, takePendingWakes } from '../src/lockage/board.js';
 
 const SCRATCH = process.env.KIROCREW_SCRATCH ?? tmpdir();
 
@@ -195,6 +195,12 @@ test('3-way precheck: if files touched by mainline intersect the dirty set, send
   const nr = listMergeQueue(cdb, 'needs_review');
   assert.equal(nr.length, 1);
   assert.ok(nr[0]?.precheck?.includes('shared.txt'));
+  // A is notified by the unread handoff post alone; no board wake on top (it made A wake twice).
+  assert.deepEqual(
+    listUnread(cdb, 'A').map((m) => [m.kind, m.ref_task_id]),
+    [['handoff', t.id]],
+  );
+  assert.deepEqual(takePendingWakes(cdb, 'A', 'board'), []);
 });
 
 test('process_merge_queue: serial processing in seq ascending (mixed: 1 auto-merge + 1 send-back)', () => {
