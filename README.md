@@ -154,7 +154,7 @@ The `publisher` set is for cleanup that, if an agent called it, could close a ti
 
 | Tool | Role |
 |---|---|
-| `create_task` | Create a task (`ticket_id` is optional; set dependencies with `depends_on`. Cycles are rejected) |
+| `create_task` | Create a task (`ticket_id` is optional; set dependencies with `depends_on`. The new task only gains incoming edges, so no cycle can form) |
 | `add_dependency` | Set a dependency (blocks) between existing tasks (`from_task` blocks `to_task`. Cycles are rejected) |
 | `list_tasks` | List tasks (with the `version` to pass to claim. Filter by `status`/`assignee`/`ticket_id`/`repo`. Unassigned is `status:"open"`. `ready_only` for only dependency-resolved ones. For `status:"blocked"` it attaches `blocked_age_sec`/`agent_silent_sec`/`last_question` as material for judging orphans (no auto-reclaim)) |
 | `claim_task` | Atomically claim a task (CAS. A conflict returns `conflict` and does not block) |

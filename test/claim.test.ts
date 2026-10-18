@@ -258,14 +258,11 @@ test('createTask(dependsOn): draws an edge and is_ready=false if a blocker is in
     title: 'dependent',
     dependsOn: [blocker.id],
   });
-  // dependent is a Task (not a cycle)
-  assert.ok('id' in dependent);
-  const dep = dependent as typeof blocker;
   // blocker incomplete → not ready
-  assert.equal(isReady(cdb, dep.id), false);
+  assert.equal(isReady(cdb, dependent.id), false);
   // making the blocker done makes it ready
   cdb.db.prepare(`UPDATE tasks SET status='done' WHERE id=?`).run(blocker.id);
-  assert.equal(isReady(cdb, dep.id), true);
+  assert.equal(isReady(cdb, dependent.id), true);
   cdb.close();
 });
 
@@ -274,9 +271,7 @@ test('createTask(dependsOn): a diamond (depends_on members connected by a path) 
   // a blocks b; T depends on both a and b. a→b plus a→T, b→T is a DAG with a redundant edge.
   const a = createTask(cdb, { repo: 'app', title: 'a' });
   const b = createTask(cdb, { repo: 'app', title: 'b', dependsOn: [a.id] });
-  assert.ok('id' in b);
   const t = createTask(cdb, { repo: 'app', title: 't', dependsOn: [a.id, b.id] });
-  assert.ok('id' in t, 'a diamond depends_on must not be rejected as a cycle');
   const edges = cdb.db
     .prepare(`SELECT from_task FROM task_edges WHERE to_task = ? AND kind = 'blocks' ORDER BY from_task`)
     .all(t.id) as Array<{ from_task: string }>;
@@ -286,7 +281,7 @@ test('createTask(dependsOn): a diamond (depends_on members connected by a path) 
   );
   // the order of depends_on does not matter
   const t2 = createTask(cdb, { repo: 'app', title: 't2', dependsOn: [b.id, a.id] });
-  assert.ok('id' in t2);
+  assert.equal(getTask(cdb.db, t2.id)?.status, 'open');
   cdb.close();
 });
 
@@ -295,7 +290,6 @@ test('addDependency: a real cycle through a diamond is still rejected', () => {
   const a = createTask(cdb, { repo: 'app', title: 'a' });
   const b = createTask(cdb, { repo: 'app', title: 'b', dependsOn: [a.id] });
   const t = createTask(cdb, { repo: 'app', title: 't', dependsOn: [a.id, b.id] });
-  assert.ok('id' in b && 'id' in t);
   // t→a would close a→t→a (and a→b→t→a)
   const r = addDependency(cdb, t.id, a.id);
   assert.ok(!r.ok && r.reason === 'cycle');
@@ -374,7 +368,7 @@ test('listTasks(ready_only): excludes tasks that have an incomplete blocker', ()
     repo: 'app',
     title: 'dependent',
     dependsOn: [blocker.id],
-  }) as typeof blocker;
+  });
   const free = createTask(cdb, { repo: 'app', title: 'free' }); // no dependency
 
   // ready_only: blocker is incomplete so dependent is excluded; blocker and free are ready

@@ -59,7 +59,7 @@ from the agents (the `publisher` set is enabled by `lockage-publish` itself, so 
 
 | Tool | Role |
 |---|---|
-| `create_task` | Create a task (`ticket_id` optional, set dependencies with `depends_on`. Cycles rejected) |
+| `create_task` | Create a task (`ticket_id` optional, set dependencies with `depends_on`. The new task only gains incoming edges, so no cycle can form) |
 | `add_dependency` | Set a dependency (blocks) between existing tasks (`from_task` blocks `to_task`. Cycles rejected) |
 | `list_tasks` | List tasks (with the `version` to pass to claim. Filter by `status`/`assignee`/`ticket_id`/`repo`. Unassigned is `status:"open"`. `ready_only` for only dependency-resolved. For `status:"blocked"` it attaches material for judging orphans) |
 | `claim_task` | Atomically claim a task (CAS. A conflict returns `conflict` and does not block) |
