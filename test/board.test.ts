@@ -19,6 +19,8 @@ import {
   listUnread,
   countUnread,
   markBoardRead,
+  previewUnread,
+  readUnread,
   type BoardMessage,
 } from '../src/lockage/board.js';
 import { publishDirty, claimFiles } from '../src/lockage/files.js';
@@ -498,4 +500,58 @@ test('wait_for_unblock: a leftover board wake alone (old DB) is still honored', 
   const r = await quickWait('A');
   assert.equal(r.woke_by, 'board');
   assert.deepEqual(r.payload, [{ reason: 'merge_needs_review' }]);
+});
+
+// ---- heartbeat preview / read_board(unread_only) ----
+
+test('previewUnread: the newest 3 unread as short previews, without advancing the read position', () => {
+  getBoardCursor(cdb, 'A');
+  const task = createTask(cdb, { repo: 'r', title: 't' });
+  for (let i = 1; i <= 4; i++) postBoard(cdb, { agentId: 'B', toAgent: 'A', body: `m${i}` });
+  postBoard(cdb, {
+    agentId: 'B',
+    kind: 'question',
+    body: 'x'.repeat(100),
+    refTaskId: task.id,
+  });
+
+  const p = previewUnread(cdb, 'A');
+  assert.deepEqual(
+    p.map((m) => m.seq),
+    [3, 4, 5],
+  );
+  assert.equal(p[2]?.kind, 'question');
+  assert.equal(p[2]?.ref_task_id, task.id);
+  assert.equal(p[2]?.body_head, `${'x'.repeat(80)}…`);
+  assert.equal(p[0]?.body_head, 'm3');
+  assert.equal(countUnread(cdb, 'A'), 5, 'preview does not mark anything read');
+});
+
+test('readUnread: returns only unread, marks them read, and is empty when called again', () => {
+  getBoardCursor(cdb, 'A');
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'to A' });
+  postBoard(cdb, { agentId: 'B', body: 'to everyone' });
+  postBoard(cdb, { agentId: 'A', body: 'my own' });
+  postBoard(cdb, { agentId: 'system', kind: 'ticket_ready', body: 'ready' });
+
+  assert.deepEqual(
+    readUnread(cdb, 'A').messages.map((m) => m.body),
+    ['to A', 'to everyone'],
+  );
+  assert.deepEqual(readUnread(cdb, 'A').messages, []);
+  // the normal read still returns everything
+  assert.equal(readBoard(cdb).messages.length, 4);
+});
+
+test('readUnread: limit returns the oldest unread first and leaves the rest unread', () => {
+  getBoardCursor(cdb, 'A');
+  for (let i = 1; i <= 3; i++) postBoard(cdb, { agentId: 'B', toAgent: 'A', body: `m${i}` });
+  assert.deepEqual(
+    readUnread(cdb, 'A', { limit: 2 }).messages.map((m) => m.body),
+    ['m1', 'm2'],
+  );
+  assert.deepEqual(
+    readUnread(cdb, 'A').messages.map((m) => m.body),
+    ['m3'],
+  );
 });

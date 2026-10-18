@@ -508,6 +508,48 @@ export function countUnread(cdb: CoordDb, agentId: string): number {
   return row.n;
 }
 
+/** One line of heartbeat's unread_preview: enough to judge whether to read now. */
+export interface UnreadPreview {
+  seq: number;
+  author: string;
+  kind: BoardMessage['kind'];
+  body_head: string;
+  ref_task_id: string | null;
+}
+
+/** How much of the body unread_preview shows. */
+const PREVIEW_BODY_CHARS = 80;
+
+/**
+ * The newest `n` unread posts (seq ascending) as short previews, for heartbeat. Does not advance the
+ * read position: the agent reads the posts themselves with read_board(unread_only).
+ */
+export function previewUnread(cdb: CoordDb, agentId: string, n = 3): UnreadPreview[] {
+  const w = unreadWhere(getBoardCursor(cdb, agentId), agentId);
+  const rows = cdb.db
+    .prepare(`SELECT * FROM board_messages WHERE ${w.sql} ORDER BY seq DESC LIMIT ?`)
+    .all(...(w.params as never[]), n) as unknown as BoardMessage[];
+  return rows.reverse().map((m) => ({
+    seq: m.seq,
+    author: m.author,
+    kind: m.kind,
+    body_head:
+      m.body.length > PREVIEW_BODY_CHARS ? `${m.body.slice(0, PREVIEW_BODY_CHARS)}…` : m.body,
+    ref_task_id: m.ref_task_id,
+  }));
+}
+
+/** read_board(unread_only): return the agent's unread posts and mark them read. */
+export function readUnread(
+  cdb: CoordDb,
+  agentId: string,
+  opts: { limit?: number } = {},
+): { messages: BoardMessage[] } {
+  const messages = listUnread(cdb, agentId, { limit: opts.limit ?? 100 });
+  markBoardRead(cdb, agentId, messages);
+  return { messages };
+}
+
 /**
  * Advance an agent's read position past the posts just returned to it, separately for directed and
  * broadcast. Only moves forward (MAX), so a stale caller cannot move it back. Posts not addressed to
