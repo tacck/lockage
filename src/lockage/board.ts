@@ -1,5 +1,7 @@
 import { ulid } from 'ulid';
+import type { DatabaseSync } from 'node:sqlite';
 import { unixNow, type CoordDb } from '../db/index.js';
+import { ensureBoardCursor, type BoardCursor } from './board-cursor.js';
 import { sweepExpired } from './claim.js';
 
 /**
@@ -442,6 +444,192 @@ export function currentMaxBoardSeq(cdb: CoordDb): number {
 }
 
 /**
+ * Kinds that never wake an agent nor count as unread. They are records for publisher_status /
+ * lockage-publish, not messages to an agent; read_board still returns them as before.
+ */
+export const SYSTEM_BOARD_KINDS: ReadonlyArray<BoardMessage['kind']> = [
+  'ticket_ready',
+  'pr_opened',
+  'pr_updated',
+  'pr_merged',
+];
+
+export type { BoardCursor };
+
+/** Read an agent's read position, creating it on first sight (see ensureBoardCursor). */
+export function getBoardCursor(cdb: CoordDb, agentId: string): BoardCursor {
+  return ensureBoardCursor(cdb.db, agentId);
+}
+
+/**
+ * The most unread posts one wait_for_unblock or read_board(unread_only) returns. The rest stay
+ * unread and come back on the next call.
+ */
+export const UNREAD_RETURN_LIMIT = 100;
+
+/** The WHERE clause and params for an agent's unread posts. */
+function unreadWhere(cursor: BoardCursor, agentId: string): { sql: string; params: unknown[] } {
+  const kinds = SYSTEM_BOARD_KINDS.map(() => '?').join(', ');
+  return {
+    sql: `((to_agent = ? AND seq > ?) OR (to_agent IS NULL AND seq > ?))
+          AND author != ? AND kind NOT IN (${kinds})`,
+    params: [agentId, cursor.directed_seq, cursor.broadcast_seq, agentId, ...SYSTEM_BOARD_KINDS],
+  };
+}
+
+function selectUnread(
+  db: DatabaseSync,
+  cursor: BoardCursor,
+  agentId: string,
+  limit: number,
+): BoardMessage[] {
+  const w = unreadWhere(cursor, agentId);
+  return db
+    .prepare(`SELECT * FROM board_messages WHERE ${w.sql} ORDER BY seq ASC LIMIT ?`)
+    .all(...(w.params as never[]), limit) as unknown as BoardMessage[];
+}
+
+/** An agent's unread posts in seq ascending order (does not advance the read position). */
+export function listUnread(
+  cdb: CoordDb,
+  agentId: string,
+  opts: { limit?: number } = {},
+): BoardMessage[] {
+  return selectUnread(
+    cdb.db,
+    getBoardCursor(cdb, agentId),
+    agentId,
+    opts.limit ?? UNREAD_RETURN_LIMIT,
+  );
+}
+
+/** The number of an agent's unread posts (does not advance the read position). */
+export function countUnread(cdb: CoordDb, agentId: string): number {
+  const w = unreadWhere(getBoardCursor(cdb, agentId), agentId);
+  const row = cdb.db
+    .prepare(`SELECT COUNT(*) AS n FROM board_messages WHERE ${w.sql}`)
+    .get(...(w.params as never[])) as { n: number };
+  return row.n;
+}
+
+/** One line of heartbeat's unread_preview: enough to judge whether to read now. */
+export interface UnreadPreview {
+  seq: number;
+  author: string;
+  kind: BoardMessage['kind'];
+  body_head: string;
+  ref_task_id: string | null;
+}
+
+/** How much of the body unread_preview shows. */
+const PREVIEW_BODY_CHARS = 80;
+
+/**
+ * heartbeat's unread report: the count and the newest `n` unread posts (seq ascending) as short
+ * previews. Both come from one read position inside one read transaction, so a post arriving in
+ * between cannot make them disagree. Does not advance the read position: the agent reads the posts
+ * themselves with read_board(unread_only).
+ */
+export function summarizeUnread(
+  cdb: CoordDb,
+  agentId: string,
+  n = 3,
+): { unread_count: number; unread_preview: UnreadPreview[] } {
+  const db = cdb.db;
+  // Create the row first (may write), then read the position inside the read transaction, so a
+  // consumeUnread that finished in another process just before cannot leave read posts counted.
+  getBoardCursor(cdb, agentId);
+  db.exec('BEGIN');
+  try {
+    const w = unreadWhere(ensureBoardCursor(db, agentId), agentId);
+    const count = db
+      .prepare(`SELECT COUNT(*) AS n FROM board_messages WHERE ${w.sql}`)
+      .get(...(w.params as never[])) as { n: number };
+    const rows = db
+      .prepare(`SELECT * FROM board_messages WHERE ${w.sql} ORDER BY seq DESC LIMIT ?`)
+      .all(...(w.params as never[]), n) as unknown as BoardMessage[];
+    db.exec('COMMIT');
+    return {
+      unread_count: count.n,
+      unread_preview: rows.reverse().map((m) => ({
+        seq: m.seq,
+        author: m.author,
+        kind: m.kind,
+        body_head:
+          m.body.length > PREVIEW_BODY_CHARS ? `${m.body.slice(0, PREVIEW_BODY_CHARS)}…` : m.body,
+        ref_task_id: m.ref_task_id,
+      })),
+    };
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* already closed */
+    }
+    throw e;
+  }
+}
+
+/** Move the read position forward past `messages` (directed and broadcast separately). No transaction. */
+function advanceCursor(db: DatabaseSync, agentId: string, messages: BoardMessage[]): void {
+  let directed = 0;
+  let broadcast = 0;
+  for (const m of messages) {
+    if (m.to_agent === agentId) directed = Math.max(directed, m.seq);
+    else if (m.to_agent === null) broadcast = Math.max(broadcast, m.seq);
+  }
+  if (directed === 0 && broadcast === 0) return;
+  // MAX: only forward, so a stale caller cannot move it back.
+  db.prepare(
+    `UPDATE board_cursors
+        SET directed_seq = MAX(directed_seq, ?), broadcast_seq = MAX(broadcast_seq, ?), updated_at = ?
+      WHERE agent_id = ?`,
+  ).run(directed, broadcast, unixNow(), agentId);
+}
+
+/**
+ * Take an agent's unread posts and mark them read, atomically. Selecting and advancing inside one
+ * BEGIN IMMEDIATE means two concurrent calls for the same agent_id (several processes share the
+ * ledger, and agent_id uniqueness is only a convention) cannot both return the same post.
+ * Used by wait_for_unblock and read_board(unread_only).
+ */
+export function consumeUnread(
+  cdb: CoordDb,
+  agentId: string,
+  opts: { limit?: number } = {},
+): BoardMessage[] {
+  const db = cdb.db;
+  // Create the row outside the write transaction; it is idempotent, and this keeps the
+  // common (row exists) path to a plain SELECT before BEGIN IMMEDIATE.
+  getBoardCursor(cdb, agentId);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    // Re-read the position under the lock: another caller may have advanced it.
+    const cursor = ensureBoardCursor(db, agentId);
+    const messages = selectUnread(db, cursor, agentId, opts.limit ?? UNREAD_RETURN_LIMIT);
+    advanceCursor(db, agentId, messages);
+    db.exec('COMMIT');
+    return messages;
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* already closed */
+    }
+    throw e;
+  }
+}
+
+/** read_board(unread_only): return the agent's unread posts and mark them read. */
+export function readUnread(
+  cdb: CoordDb,
+  agentId: string,
+  opts: { limit?: number } = {},
+): { messages: BoardMessage[] } {
+  return { messages: consumeUnread(cdb, agentId, opts) };
+}
+
+/**
  * §4.8 wake — push a transient resume signal onto the pending queue.
  * Used for notifications we do not want to leave on the board, such as overlap (someone else steps into my area).
  * Called from publishDirty / the merge gate's needs_review, connecting the existing wake_targets enumeration to real delivery.
@@ -531,7 +719,9 @@ const sleep = (ms: number): Promise<void> =>
  * Internally it short-interval polls (sufficient for Phase 1 / a single process). Client-side polling disappears.
  *
  *   a) the waited task became ready (all deps done) → woke_by:"task_ready"
- *   b) a new board message for me or for everyone arrived → woke_by:"board"
+ *   b) an unread board message for me or for everyone (from my read position in board_cursors, so a
+ *      post that arrived while I was not waiting still counts) → woke_by:"board", and the read
+ *      position advances past the returned posts. System kinds and my own posts do not wake.
  *   c) overlap in my area (someone else's dirty/claim overlaps) → woke_by:"overlap"
  *   d) timeout → woke_by:"timeout"
  *
@@ -544,7 +734,6 @@ export async function waitForUnblock(
   const timeoutSec = args.timeoutSec ?? 60;
   const pollMs = args.pollMs ?? 500;
   const deadline = Date.now() + timeoutSec * 1000;
-  const cursor = currentMaxBoardSeq(cdb);
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -566,16 +755,16 @@ export async function waitForUnblock(
       };
     }
 
-    // b) a new board message for me / for everyone (seq delta). Or consume a board wake if stacked
-    //    (the merge gate's needs_review stacks it. the board_messages side can also pick it up, but insurance against misses).
-    const msgs = cdb.db
-      .prepare(
-        `SELECT * FROM board_messages
-          WHERE seq > ? AND (to_agent = ? OR to_agent IS NULL)
-          ORDER BY seq ASC`,
-      )
-      .all(cursor, args.agentId) as unknown as BoardMessage[];
-    if (msgs.length > 0) return { woke_by: 'board', payload: msgs };
+    // b) unread board messages for me / for everyone, counted from my stored read position.
+    //    Returned posts are marked read so the next wait does not return them again. Board wakes are
+    //    no longer stacked (handoff / needs_review rely on the post itself), but a DB from before may
+    //    still hold some: drain them here so the same notification does not wake twice, and still
+    //    honor them below when there is no unread post.
+    const unread = consumeUnread(cdb, args.agentId);
+    if (unread.length > 0) {
+      takePendingWakes(cdb, args.agentId, 'board');
+      return { woke_by: 'board', payload: unread };
+    }
     const boardWakes = takePendingWakes(cdb, args.agentId, 'board');
     if (boardWakes.length > 0) {
       return {

@@ -111,7 +111,7 @@ Even in an environment where the skill is unavailable, you can work by following
 |---|---|---|
 | **Right after startup** | Decide an agent_id and name yourself | `read_board` → `post_board` |
 | **Start work** | Choose a task, claim it, assign a worktree | `list_tasks(status:"open")` → `claim_task` → `assign_worktree` |
-| **During work** | Beat the heartbeat (dirty is auto-computed. publish_dirty only when you want to pre-announce) | `heartbeat` / `publish_dirty` (for pre-announcement) / `claim_files` (re-call when it appears in the response's `unclaimed`) |
+| **During work** | Beat the heartbeat (dirty is auto-computed. publish_dirty only when you want to pre-announce). If its `unread_count` > 0, read the unread board posts at the next break | `heartbeat` / `read_board(unread_only)` / `publish_dirty` (for pre-announcement) / `claim_files` (re-call when it appears in the response's `unclaimed`) |
 | **Finish work** | Commit → task_done → publish a PR | `task_done` → `publisher_status` → `lockage-publish` |
 | **Before session end** | Sweep and reconcile the unprocessed | `publisher_status` → `lockage-publish` |
 
@@ -183,14 +183,43 @@ A human (the orchestrator) decides on resumption:
   without resuming the task, close it explicitly with `resolve_question(agent_id, message_id)` (idempotent).
 - To see only unresolved ones, `read_board(kind:"question", unresolved_only:true)`.
 
+### Reading board posts while you work
+
+Board posts are tracked per agent as read / unread, so a post that arrives while you are working is not lost.
+`heartbeat` returns `unread_count` and `unread_preview` (the newest 3) without marking them read.
+- When `unread_count > 0`, read them with `read_board(agent_id, unread_only:true)` at the next break.
+  It returns unread posts in `seq` order (100 per call by default, changeable with `limit`; the rest come back on the next call) and marks them read.
+  In the returned list, handle `question` and `handoff` first. A `handoff` is one of two things; see "How to tell the two kinds of handoff apart" below.
+- Your own posts and `ticket_ready` / `pr_*` are not counted as unread.
+- Posts to everyone count from your first lockage call made as yourself (normally the `post_board` that names you right after startup), so name yourself before anything else.
+  That is `post_board`, `heartbeat`, `wait_for_unblock`, `read_board(unread_only)`, `task_done`, and the tools that extend your lease
+  (`claim_task`, `claim_files`, `assign_worktree`, ...). Not counted: `block_task` / `resume_task` / `handoff_task` (they may be called
+  on your behalf) and tools where `agent_id` is only a filter (`read_board` without `unread_only`, `list_dirty`, `list_worktrees`).
+
 ### When you are idle
 
 Before looking for the next job, call `wait_for_unblock(agent_id)` once.
+It wakes on unread posts too, including ones that arrived while you were working, and marks the returned posts read.
 Do not keep hitting `list_tasks` in an empty loop.
-- If there is a message with `woke_by:"board"` and `kind:"handoff"`,
-  confirm the claim has moved with `list_tasks(assignee:<your agent_id>, status:"in_progress")`,
-  then read the predecessor's `question` with `read_board` and
-  continue from where the worktree left off.
+- If there is a message with `woke_by:"board"` and `kind:"handoff"`, tell the two kinds apart (below).
+
+### How to tell the two kinds of handoff apart
+
+Look at the `author` of a `kind:"handoff"` post (whether `wait_for_unblock` returned it or you read it with `read_board`).
+- **`author:"system"` = a `needs_review` send-back.** Your own `task_done` normally returns its send-back in the result and does
+  not post it, so a board post usually means someone else's merge run hit your task. When merges run at the same time, the same
+  send-back can reach you both ways: if you already handled it from a `task_done` result, skip the post. `ref_task_id` is the task.
+  The body is one of:
+  - `merge needs review: <files>`: files likely to conflict. Resolve them in that task's worktree, re-commit, and re-run `task_done`.
+  - `merge failed, needs review: <error>`: the merge itself failed. Read the error, fix the cause in the worktree if you can
+    (e.g. resolve the conflict it names), and re-run `task_done`. If you cannot tell what to do, or the same error comes back after
+    your fix, stop retrying: leave a `question` with `ref_task_id` and `block_task` (see "When you cannot complete").
+- **Any other `author` = possibly a task handed over to you.** `handoff_task` posts as the previous assignee, but anyone can also
+  post `kind:"handoff"` directly. Confirm with `list_tasks(assignee:<your agent_id>, status:"in_progress")`:
+  - The task in `ref_task_id` has just become yours: read the predecessor's `question` with `read_board` and
+    continue from where the worktree left off.
+  - It is not yours, or it was already yours before the post: it is only a message about that task. Read it and act on it
+    (reply with `post_board` if asked).
 
 ### Safety net before session end
 

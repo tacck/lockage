@@ -25,6 +25,7 @@
 
 - **A2A wake でポーリングを消す**
   他エージェントが自分の担当領域に踏み込んだ、依存タスクが完了した、自分宛の連絡が来た —— といったイベントを `wait_for_unblock` の 1 回の long-poll で待てます。エージェント側の空ポーリングが不要になります。
+  board の投稿はエージェントごとに既読・未読で管理するので、作業中（待機していない間）に届いた投稿も失われません。次の `wait_for_unblock` がその投稿で起き、作業中は `heartbeat` が未読の件数を知らせます。
 
 - **状態は SQLite が一次情報源**
   タスク・claim・worktree・board などの状態の一次情報源は SQLite です。既定の置き場はホームディレクトリの `~/.lockage/lockage.sqlite`（`LOCKAGE_DB` で変更可）です。
@@ -163,7 +164,7 @@ MCP ツールとして以下を公開しています。`agent_id` は各エー�
 | `resume_task` | 人間が「続行」を指示したときの同一 agent 再開（`blocked`→`in_progress`）。別 worker へ回すのは handoff（人間明示時のみ） |
 | `handoff_task` | `blocked` タスクを別 worker へ **worktree 単位で一括移管**（§4.7）。task／この task の active worktree／`holder=from` かつ `task_id` 一致の active claim／移管 worktree の dirty_set を同一 CAS トランザクションで `from`→`to` へ付け替える（branch／path は不変）。二重 handoff は `assignee=from` かつ `blocked` の CAS で防止。`in_progress` は横取り移管不可（必ず `blocked` にしてから）。別 worker 化は人間明示時のみ |
 | `task_done` | 完了 → 統合マージゲートへ（1-C 即マージ / 1-B 直列ゲート）。マージ成功で `done` |
-| `heartbeat` | 生存報告。保持中タスク／claim の lease を延長。あわせて割当中 worktree の git 状態から dirty を自動計算し、claim の glob 外は `unclaimed` として返す（§52） |
+| `heartbeat` | 生存報告。保持中タスク／claim の lease を延長。あわせて割当中 worktree の git 状態から dirty を自動計算し、claim の glob 外は `unclaimed` として返す（§52）。あわせて `unread_count` と `unread_preview`（未読の board 投稿の最新 3 件: `seq` / `author` / `kind` / `body_head` / `ref_task_id`）を返す。既読は進めない |
 
 ### チケット操作（課題のまとめ単位・モデル3）
 
@@ -193,8 +194,8 @@ MCP ツールとして以下を公開しています。`agent_id` は各エー�
 
 | ツール | 役割 |
 |---|---|
-| `post_board` | 共有ボードへ投稿（`to_agent` 指定で有向 handoff） |
-| `read_board` | ボード読取（`since` カーソルで差分取得。`unresolved_only:true` で解決済みの question を除く。未解決の question だけを見るときは `kind:"question"` と組み合わせる） |
+| `post_board` | 共有ボードへ投稿（`to_agent` 指定で有向 handoff）。投稿は宛先のエージェント（`to_agent` を省いたときは自分以外の全員）にとって未読になる |
+| `read_board` | ボード読取（`since` カーソルで差分取得。`unresolved_only:true` で解決済みの question を除く。未解決の question だけを見るときは `kind:"question"` と組み合わせる）。`agent_id` と `unread_only:true` を渡すと、自分の未読だけを返して既読にする（既定は 1 回 100 件で、`limit` で変えられる。`since` / `to_agent` / `kind` / `unresolved_only` とは組み合わせられない） |
 | `resolve_question` | question を解決済みにする（自動解決の補完。task を done/abandoned にすると紐づく未解決 question は自動解決されるので、`ref_task_id` を持たない question や人間が回答だけして閉じたい question を明示的に閉じる用。冪等） |
 
 ### worktree
@@ -229,7 +230,18 @@ MCP ツールとして以下を公開しています。`agent_id` は各エー�
 
 | ツール | 役割 |
 |---|---|
-| `wait_for_unblock` | long-poll。「依存タスク ready / 自分宛か全体宛の board / overlap / timeout」のいずれかまでブロックし、理由（`woke_by`）を返す |
+| `wait_for_unblock` | long-poll。「依存タスク ready / 自分宛か全体宛の未読の board 投稿 / overlap / timeout」のいずれかまでブロックし、理由（`woke_by`）を返す。返した投稿は既読になる |
+
+#### board の既読・未読
+
+エージェントごとに board の既読位置を持ち、`wait_for_unblock` / `heartbeat` / `read_board(unread_only)` はそこから未読を数えます。
+
+- **待機していなくても未読は残ります。** 作業中や、タイムアウトしてから次の `wait_for_unblock` を呼ぶまでの間に届いた投稿でも、次の呼び出しが起きます。
+- **既読が進むのは投稿を返したときです。** `wait_for_unblock`（`woke_by:"board"`）か `read_board(unread_only)` が投稿を返すと既読になります。`heartbeat` は知らせるだけで、既読にはしません。
+- **新しいエージェントの読み始め:** 自分宛ての投稿は最初から数えます（起動前の worker への `handoff_task` も拾えます）。全員宛ての投稿は、自分として初めて lockage を呼んだ時点から数えます（起動時に名乗る `post_board`、`heartbeat`、`wait_for_unblock`、`task_done`、`claim_task` のように lease を延ばすツールなど。代理で呼ばれることのある `block_task` / `resume_task` / `handoff_task` と、`agent_id` を絞り込みに使うだけのツール（`unread_only` なしの `read_board`、`list_dirty`、`list_worktrees`）は数えません）。過去の投稿は流れ込みません。この機能より前の台帳を上げたときは、すでに動いたことのあるエージェントは宛先付き・全員宛てとも最新の投稿から数えるので、解決済みの古い投稿が未読に戻ることはありません。その代わり、上げた時点でまだ読んでいなかった自分宛ての投稿も既読として扱われます（board には残るので `read_board` で読めます）。タスクを引き継がれてまだ起動していない worker は、新しいエージェントと同じ扱いになり、その handoff を受け取れます。
+- **`handoff` は 2 種類あります:** `author:"system"` は、他の誰かが動かしたマージで差し戻された `needs_review` の通知です（自分の `task_done` で差し戻されたときは、通常は戻り値で返り、board には投稿されません。マージが同時に動くと両方に届くことがあるので、処理済みの投稿は読み流します）。本文は `merge needs review: <ファイル>`、またはマージそのものが失敗したときの `merge failed, needs review: <エラー>` です。それ以外の投稿者は、`handoff_task` で自分に引き継がれたタスクの可能性があります。`kind:"handoff"` は誰でも直接投稿できるので、`list_tasks(assignee:<自分>)` で確かめます。
+- **未読に数えないもの:** 自分の投稿と、`ticket_ready` / `pr_opened` / `pr_updated` / `pr_merged`（`publisher_status` / `lockage-publish` のための記録）。`unread_only` なしの `read_board` では、これまでどおり読めます。
+- 作業中に `heartbeat` の `unread_count > 0` を見たら、区切りのよいところで `read_board(agent_id, unread_only:true)` で読みます。未読を `seq` 順に返し（既定は 1 回 100 件で、`limit` で変えられます。残りは未読のまま次の呼び出しで返ります）、既読にします。返った一覧の中では `question` と `handoff` を先に処理します。
 
 ---
 
@@ -253,7 +265,8 @@ MCP ツールとして以下を公開しています。`agent_id` は各エー�
    - チケット配下のタスク（1 つでも）→ 衝突候補なしなら直列ゲート（1-B）経由でチケット統合ブランチへ集約
    - チケットに紐づかないタスク → 衝突候補なしなら base ブランチへ即マージ（1-C）
    - 衝突候補あり → `needs_review` に差し戻し。戻り値の `needs_review[].contested`（衝突しそうなファイル）を見て worktree 上で解決し、再度 `task_done`
-6. 手が空いたら `wait_for_unblock(agent_id)` で次のイベント（依存解消・連絡・overlap）まで待機
+6. 作業中は `heartbeat` の `unread_count` を見て、0 より大きければ区切りのよいところで `read_board(agent_id, unread_only:true)` で読む
+7. 手が空いたら `wait_for_unblock(agent_id)` で次のイベント（依存解消・連絡・overlap）まで待機。作業中に届いた投稿でも起きる
 
 ---
 
@@ -322,7 +335,7 @@ sequenceDiagram
 
     Note over Agent,Lockage: ⑧ 次へ — 手が空いたら long-poll で待つ
     Agent->>Lockage: wait_for_unblock(agent_id)
-    Lockage-->>Agent: 依存解消 / 自分宛 board / overlap で wake
+    Lockage-->>Agent: 依存解消 / 自分宛か全員宛ての未読 board / overlap で wake
 ```
 
 **要点**:

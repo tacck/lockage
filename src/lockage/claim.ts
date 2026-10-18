@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { ulid } from 'ulid';
 import { unixNow, type CoordDb } from '../db/index.js';
+import { ensureBoardCursor } from './board-cursor.js';
 
 // Task lease (the grace period before heartbeat lapse returns it to open). Distinct from claims' lease_ttl.
 export const TASK_LEASE_SEC = 15 * 60; // 15 minutes
@@ -804,6 +805,10 @@ export function heartbeat(
        VALUES (?, NULL, ?, ?, ?, 'local')
        ON CONFLICT(agent_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
     ).run(agentId, now, now, cdb.hostId);
+    // Start tracking the agent's board unread from its first own call (this piggybacks on most
+    // tools), not only from its first heartbeat / wait_for_unblock. Not for touchAgent:false: a
+    // handoff to a worker that has not launched must not start its broadcast position early.
+    ensureBoardCursor(db, agentId);
   }
 
   if (o.taskId) {

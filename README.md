@@ -25,6 +25,7 @@ It is a tool aimed at collaboration on a single host (one personal machine).
 
 - **A2A wake eliminates polling**
   Events such as another agent stepping into your area, a dependency task completing, or a message addressed to you — all of these can be awaited with a single `wait_for_unblock` long-poll. The agent no longer needs to busy-poll.
+  Board posts are tracked per agent as read / unread, so a post that arrives while you are working (not waiting) is not lost: the next `wait_for_unblock` wakes on it, and `heartbeat` reports the unread count while you work.
 
 - **SQLite is the single source of truth for state**
   The source of truth for state such as tasks, claims, worktrees, and the board is SQLite. The default location is `~/.lockage/lockage.sqlite` in the home directory (changeable via `LOCKAGE_DB`).
@@ -163,7 +164,7 @@ The `publisher` set is for cleanup that, if an agent called it, could close a ti
 | `resume_task` | The same agent resumes when a human instructs "continue" (`blocked`→`in_progress`). Routing to another worker is handoff (only when a human explicitly says so) |
 | `handoff_task` | Transfer a `blocked` task to another worker **as a whole worktree unit** (§4.7). In a single CAS transaction, reassign the task/its active worktree/the active claim whose `holder=from` and `task_id` match/the dirty_set of the transferred worktree from `from`→`to` (branch/path unchanged). Double handoff is prevented by a CAS on `assignee=from` and `blocked`. An `in_progress` task cannot be snatched (must be `blocked` first). Making it another worker's is only on explicit human instruction |
 | `task_done` | Complete → to the integration merge gate (1-C immediate merge / 1-B serial gate). On merge success, `done` |
-| `heartbeat` | Liveness report. Extends the lease of held tasks/claims. Also auto-computes dirty from the git state of the assigned worktree and returns anything outside the claim's globs as `unclaimed` (§52) |
+| `heartbeat` | Liveness report. Extends the lease of held tasks/claims. Also auto-computes dirty from the git state of the assigned worktree and returns anything outside the claim's globs as `unclaimed` (§52). Also returns `unread_count` and `unread_preview` (the newest 3 unread board posts: `seq` / `author` / `kind` / `body_head` / `ref_task_id`) without marking them read |
 
 ### Ticket operations (an aggregation unit for issues; model 3)
 
@@ -193,8 +194,8 @@ A ticket is a cross-cutting, long-lived, un-claimed aggregation unit for issues.
 
 | Tool | Role |
 |---|---|
-| `post_board` | Post to the shared board (specify `to_agent` for a directed handoff) |
-| `read_board` | Read the board (incremental fetch with a `since` cursor. `unresolved_only:true` excludes resolved questions. Combine with `kind:"question"` to see only unresolved questions) |
+| `post_board` | Post to the shared board (specify `to_agent` for a directed handoff). The post becomes unread for its recipient (or for everyone else, without `to_agent`) |
+| `read_board` | Read the board (incremental fetch with a `since` cursor. `unresolved_only:true` excludes resolved questions. Combine with `kind:"question"` to see only unresolved questions). `agent_id` + `unread_only:true` returns only your unread posts (100 per call by default, changeable with `limit`) and marks them read (cannot be combined with `since` / `to_agent` / `kind` / `unresolved_only`) |
 | `resolve_question` | Mark a question resolved (a complement to auto-resolution. When a task is set done/abandoned, the linked unresolved questions are auto-resolved, so this is for explicitly closing a question with no `ref_task_id` or one a human only answered and wants to close. Idempotent) |
 
 ### worktree
@@ -229,7 +230,18 @@ An advisory lock so that multiple `lockage-publish` processes launched at once d
 
 | Tool | Role |
 |---|---|
-| `wait_for_unblock` | Long-poll. Blocks until one of "dependency task ready / board addressed to you or to all / overlap / timeout," and returns the reason (`woke_by`) |
+| `wait_for_unblock` | Long-poll. Blocks until one of "dependency task ready / unread board post addressed to you or to all / overlap / timeout," and returns the reason (`woke_by`). Returned posts are marked read |
+
+#### Read / unread on the board
+
+Each agent has its own board read position, and `wait_for_unblock` / `heartbeat` / `read_board(unread_only)` count unread from it.
+
+- **Unread survives not waiting.** A post that arrives while you are working, or between a timeout and the next `wait_for_unblock`, wakes the next call.
+- **Read advances when posts are returned** by `wait_for_unblock` (`woke_by:"board"`) or `read_board(unread_only)`. `heartbeat` only reports; it does not mark read.
+- **Starting point for a new agent:** posts addressed to you count from the beginning (so a `handoff_task` to a worker before it launched is picked up). Posts to everyone count from your first lockage call made as yourself — the `post_board` that names you at startup, `heartbeat`, `wait_for_unblock`, `task_done`, or a tool that extends your lease such as `claim_task` (not `block_task` / `resume_task` / `handoff_task`, which may be called on your behalf, nor tools where `agent_id` is only a filter, such as `read_board` without `unread_only`, `list_dirty` or `list_worktrees`) — so old history does not flood in. When a ledger from before this feature is upgraded, agents that have already run start at the latest post for both, so long-resolved posts do not come back as unread; the flip side is that posts to them that were still unread at upgrade time are taken as read too (they stay on the board for `read_board`). A worker that was handed a task but has not launched yet starts like a newcomer and still gets that handoff.
+- **Two kinds of `handoff`:** `author:"system"` is a `needs_review` send-back from a merge run someone else drove (your own `task_done` normally returns yours in its result and does not post it; when merges run at the same time it can arrive both ways, so skip a post you already handled). The body is `merge needs review: <files>` or, when the merge itself failed, `merge failed, needs review: <error>`. Any other author may be a task handed to you with `handoff_task`: confirm with `list_tasks(assignee:<you>)`, since anyone can also post `kind:"handoff"` directly.
+- **Not counted as unread:** your own posts and `ticket_ready` / `pr_opened` / `pr_updated` / `pr_merged` (records for `publisher_status` / `lockage-publish`). `read_board` without `unread_only` still returns them.
+- While working, when `heartbeat` shows `unread_count > 0`, read them with `read_board(agent_id, unread_only:true)` at the next break. It returns unread posts in `seq` order (100 per call by default, changeable with `limit`; the rest stay unread for the next call) and marks them read; in the returned list, handle `question` and `handoff` first.
 
 ---
 
@@ -253,7 +265,8 @@ The flow of one agent processing one task:
    - A task under a ticket (even just one) → if there are no conflict candidates, aggregated into the ticket integration branch via the serial gate (1-B)
    - A task not linked to a ticket → if there are no conflict candidates, merged straight into the base branch (1-C)
    - A conflict candidate exists → sent back to `needs_review`. Look at the returned `needs_review[].contested` (files likely to conflict), resolve in the worktree, and re-run `task_done`
-6. When idle, wait for the next event (dependency resolved, communication, overlap) with `wait_for_unblock(agent_id)`
+6. While working, check `heartbeat`'s `unread_count`; if it is above 0, read with `read_board(agent_id, unread_only:true)` at the next break
+7. When idle, wait for the next event (dependency resolved, communication, overlap) with `wait_for_unblock(agent_id)`. Posts that arrived while you were working wake it too
 
 ---
 
@@ -322,7 +335,7 @@ sequenceDiagram
 
     Note over Agent,Lockage: ⑧ Next — when idle, wait via long-poll
     Agent->>Lockage: wait_for_unblock(agent_id)
-    Lockage-->>Agent: wake on dependency resolved / board addressed to you / overlap
+    Lockage-->>Agent: wake on dependency resolved / unread board post to you or to all / overlap
 ```
 
 **Key points**:
