@@ -175,7 +175,7 @@ export function buildServer(
     'create_task',
     {
       description:
-        'Create a task. Right after creation it is open and unassigned. ticket_id is optional (you can also create minor tasks not tied to a ticket). This task does not become ready until every task passed in depends_on is done. If the dependencies form a cycle, returns {ok:false, reason:"cycle"}.',
+        'Create a task. Right after creation it is open and unassigned. ticket_id is optional (you can also create minor tasks not tied to a ticket). This task does not become ready until every task passed in depends_on is done. depends_on cannot form a cycle (the new task only gains incoming edges), so a redundant dependency such as depending on both A and a task that already depends on A is accepted.',
       inputSchema: {
         repo: z.string().describe('target repo identifier'),
         title: z.string(),

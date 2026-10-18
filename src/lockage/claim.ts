@@ -32,36 +32,9 @@ export type ClaimResult =
 
 /**
  * Create a task. ticket_id is nullable (model 3: minor tasks without a ticket are allowed).
- * Passing depends_on adds edges to the dependency DAG (blocks). It cycle-checks before adding edges
- * and rejects depends_on that would form a cycle with { ok:false, reason:'cycle' } (§4.8 DAG invariant).
+ * Passing depends_on adds an edge D→T (D blocks T) for each D. The new task T only gets incoming
+ * edges, so this never forms a cycle (§4.8 DAG invariant); cycles are rejected by addDependency.
  */
-export interface CycleError {
-  ok: false;
-  reason: 'cycle';
-  detail: string;
-}
-
-export function createTask(
-  cdb: CoordDb,
-  args: {
-    repo: string;
-    title: string;
-    description?: string;
-    ticketId?: string | null;
-    priority?: number;
-  },
-): Task;
-export function createTask(
-  cdb: CoordDb,
-  args: {
-    repo: string;
-    title: string;
-    description?: string;
-    ticketId?: string | null;
-    priority?: number;
-    dependsOn: string[];
-  },
-): Task | CycleError;
 export function createTask(
   cdb: CoordDb,
   args: {
@@ -72,27 +45,11 @@ export function createTask(
     priority?: number;
     dependsOn?: string[];
   },
-): Task | CycleError {
+): Task {
   const dependsOn = args.dependsOn ?? [];
 
-  // If there is an existing cycle among depends_on, reject before adding edges.
-  // Invariant: the new task T has no edges yet, so "a cycle forms after adding T" happens only if
-  // there is an existing path D_i → … → D_j among depends_on and D_j also blocks T (= D_j is also in
-  // depends_on). Therefore it suffices to check, for every ordered pair (d, other) of depends_on,
-  // only "whether there is an existing path from other to d" (no need to traverse T itself).
-  for (const d of dependsOn) {
-    for (const other of dependsOn) {
-      if (d === other) continue;
-      // Reachable from d to other and other also tries to block d → the seed of a cycle
-      if (isReachable(cdb.db, other, d)) {
-        return {
-          ok: false,
-          reason: 'cycle',
-          detail: `depends_on would create a dependency cycle (${other} ⇄ ${d})`,
-        };
-      }
-    }
-  }
+  // No cycle check here: a path between two depends_on members (D1→D2 with T depending on both) is
+  // only a redundant edge, not a cycle. Checking reachability between members wrongly rejected such diamonds.
 
   const now = unixNow();
   const id = ulid();
