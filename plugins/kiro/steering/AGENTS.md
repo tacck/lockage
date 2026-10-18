@@ -111,7 +111,7 @@ Even in an environment where the skill is unavailable, you can work by following
 |---|---|---|
 | **Right after startup** | Decide an agent_id and name yourself | `read_board` → `post_board` |
 | **Start work** | Choose a task, claim it, assign a worktree | `list_tasks(status:"open")` → `claim_task` → `assign_worktree` |
-| **During work** | Beat the heartbeat (dirty is auto-computed. publish_dirty only when you want to pre-announce) | `heartbeat` / `publish_dirty` (for pre-announcement) / `claim_files` (re-call when it appears in the response's `unclaimed`) |
+| **During work** | Beat the heartbeat (dirty is auto-computed. publish_dirty only when you want to pre-announce). If its `unread_count` > 0, read the unread board posts at the next break | `heartbeat` / `read_board(unread_only)` / `publish_dirty` (for pre-announcement) / `claim_files` (re-call when it appears in the response's `unclaimed`) |
 | **Finish work** | Commit → task_done → publish a PR | `task_done` → `publisher_status` → `lockage-publish` |
 | **Before session end** | Sweep and reconcile the unprocessed | `publisher_status` → `lockage-publish` |
 
@@ -183,9 +183,18 @@ A human (the orchestrator) decides on resumption:
   without resuming the task, close it explicitly with `resolve_question(agent_id, message_id)` (idempotent).
 - To see only unresolved ones, `read_board(kind:"question", unresolved_only:true)`.
 
+### Reading board posts while you work
+
+Board posts are tracked per agent as read / unread, so a post that arrives while you are working is not lost.
+`heartbeat` returns `unread_count` and `unread_preview` (the newest 3) without marking them read.
+- When `unread_count > 0`, read them with `read_board(agent_id, unread_only:true)` at the next break (it marks them read).
+  Read `question` and `handoff` first; a `handoff` from `system` is a `needs_review` send-back.
+- Your own posts and `ticket_ready` / `pr_*` are not counted as unread.
+
 ### When you are idle
 
 Before looking for the next job, call `wait_for_unblock(agent_id)` once.
+It wakes on unread posts too, including ones that arrived while you were working, and marks the returned posts read.
 Do not keep hitting `list_tasks` in an empty loop.
 - If there is a message with `woke_by:"board"` and `kind:"handoff"`,
   confirm the claim has moved with `list_tasks(assignee:<your agent_id>, status:"in_progress")`,
