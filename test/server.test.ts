@@ -327,6 +327,55 @@ test('resolve_question → read_board(unresolved_only) works over JSON-RPC', asy
   cdb.close();
 });
 
+test('heartbeat returns unread_count / unread_preview and read_board(unread_only) reads them over JSON-RPC', async () => {
+  const { client, cdb } = await connect();
+  // A appears first, so only later broadcasts count for it
+  await client.callTool({ name: 'heartbeat', arguments: { agent_id: 'A' } });
+  await client.callTool({
+    name: 'post_board',
+    arguments: { agent_id: 'B', to_agent: 'A', kind: 'question', body: 'can you check?' },
+  });
+  await client.callTool({ name: 'post_board', arguments: { agent_id: 'B', body: 'to everyone' } });
+  await client.callTool({ name: 'post_board', arguments: { agent_id: 'A', body: 'my own' } });
+
+  const hb = parse(await client.callTool({ name: 'heartbeat', arguments: { agent_id: 'A' } }));
+  assert.equal(hb.unread_count, 2);
+  assert.deepEqual(
+    hb.unread_preview.map((m: any) => [m.kind, m.body_head]),
+    [
+      ['question', 'can you check?'],
+      ['note', 'to everyone'],
+    ],
+  );
+  // heartbeat does not mark read
+  const hb2 = parse(await client.callTool({ name: 'heartbeat', arguments: { agent_id: 'A' } }));
+  assert.equal(hb2.unread_count, 2);
+
+  const unread = parse(
+    await client.callTool({ name: 'read_board', arguments: { agent_id: 'A', unread_only: true } }),
+  );
+  assert.deepEqual(
+    unread.messages.map((m: any) => m.body),
+    ['can you check?', 'to everyone'],
+  );
+  const hb3 = parse(await client.callTool({ name: 'heartbeat', arguments: { agent_id: 'A' } }));
+  assert.equal(hb3.unread_count, 0);
+  assert.deepEqual(hb3.unread_preview, []);
+  cdb.close();
+});
+
+test('read_board(unread_only) rejects a missing agent_id and other filters', async () => {
+  const { client, cdb } = await connect();
+  const noAgent = await client.callTool({ name: 'read_board', arguments: { unread_only: true } });
+  assert.equal(noAgent.isError, true);
+  const withKind = await client.callTool({
+    name: 'read_board',
+    arguments: { agent_id: 'A', unread_only: true, kind: 'question' },
+  });
+  assert.equal(withKind.isError, true);
+  cdb.close();
+});
+
 test('publisher_status: with only a ticket_ready it appears in pending, and pr_opened clears it', async () => {
   const { client, cdb } = await connect();
 

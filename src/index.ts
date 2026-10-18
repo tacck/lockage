@@ -75,6 +75,9 @@ import { acquirePublishLock, releasePublishLock } from './lockage/publish-lock.j
 import {
   postBoard,
   readBoard,
+  readUnread,
+  countUnread,
+  previewUnread,
   resolveQuestion,
   waitForUnblock,
   computePublisherStatus,
@@ -409,7 +412,7 @@ export function buildServer(
     'heartbeat',
     {
       description:
-        'Signal that you are alive and extend the lease on the tasks and claims you hold (task lease is 15 minutes). Calling claim_task, release_task, claim_files, publish_dirty, resolve_question, assign_worktree, or wait_for_unblock also extends it, but post_board, task_done, release_claim, release_worktree, etc. do not, so call this at intervals shorter than 15 minutes while working (around 10 minutes). Passing task_id extends only that task. It also auto-computes changes (dirty) in your assigned worktree, returning overlaps if they overlap another agent\'s dirty or claims, and files changed outside your claim glob as unclaimed.',
+        'Signal that you are alive and extend the lease on the tasks and claims you hold (task lease is 15 minutes). Calling claim_task, release_task, claim_files, publish_dirty, resolve_question, assign_worktree, or wait_for_unblock also extends it, but post_board, task_done, release_claim, release_worktree, etc. do not, so call this at intervals shorter than 15 minutes while working (around 10 minutes). Passing task_id extends only that task. It also auto-computes changes (dirty) in your assigned worktree, returning overlaps if they overlap another agent\'s dirty or claims, and files changed outside your claim glob as unclaimed. It also returns unread_count (board posts to you or to everyone that you have not read; your own posts and ticket_ready / pr_* are not counted) and unread_preview (the newest 3: seq, author, kind, body_head, ref_task_id) without marking them read. When unread_count > 0, read them with read_board(agent_id, unread_only:true) at the next break, question and handoff first.',
       inputSchema: { agent_id: z.string(), task_id: z.string().optional() },
     },
     async (a) => {
@@ -421,6 +424,9 @@ export function buildServer(
         overlaps: rc.overlaps,
         wake_targets: rc.wake_targets,
         unclaimed: rc.unclaimed,
+        // Lets a working agent notice posts without waiting; reading them is left to read_board.
+        unread_count: countUnread(cdb, a.agent_id),
+        unread_preview: previewUnread(cdb, a.agent_id),
       });
     },
   );
@@ -679,7 +685,7 @@ export function buildServer(
     'post_board',
     {
       description:
-        'Post to the shared board. Specifying to_agent addresses it to that peer. An agent waiting in wait_for_unblock wakes on posts addressed to it or to everyone (regardless of kind). Attach the target task to a question via ref_task_id. ticket_ready is posted by the server; pr_opened, pr_updated, and pr_merged are posted by lockage-publish.',
+        'Post to the shared board. Specifying to_agent addresses it to that peer. The recipient (or everyone else, when to_agent is omitted) sees it as unread: it wakes their next wait_for_unblock even if they were not waiting when you posted, and is counted in their heartbeat unread_count. Your own posts and ticket_ready / pr_* never count as unread. Attach the target task to a question via ref_task_id. ticket_ready is posted by the server; pr_opened, pr_updated, and pr_merged are posted by lockage-publish.',
       inputSchema: {
         agent_id: z.string(),
         body: z.string(),
@@ -708,8 +714,10 @@ export function buildServer(
     'read_board',
     {
       description:
-        'Read the board. Passing the last-read seq as since returns only the diff. Passing to_agent returns posts addressed to you and to everyone. Filter by kind (ticket_ready = tickets ready to become a PR; pr_opened, pr_updated, pr_merged = records from lockage-publish). unresolved_only=true excludes resolved questions (kinds other than question are still returned, so combine with kind="question" to see only unresolved questions).',
+        'Read the board. Passing the last-read seq as since returns only the diff. Passing to_agent returns posts addressed to you and to everyone. Filter by kind (ticket_ready = tickets ready to become a PR; pr_opened, pr_updated, pr_merged = records from lockage-publish). unresolved_only=true excludes resolved questions (kinds other than question are still returned, so combine with kind="question" to see only unresolved questions). unread_only=true with agent_id returns only your unread posts (to you or to everyone, from where you last read; your own posts and ticket_ready / pr_* excluded) and marks them read; it cannot be combined with since / to_agent / kind / unresolved_only.',
       inputSchema: {
+        agent_id: z.string().optional().describe('required with unread_only'),
+        unread_only: z.boolean().optional(),
         since: z.number().int().optional(),
         to_agent: z.string().optional(),
         kind: z
@@ -719,8 +727,16 @@ export function buildServer(
         unresolved_only: z.boolean().optional(),
       },
     },
-    async (a) =>
-      ok(
+    async (a) => {
+      if (a.unread_only) {
+        if (!a.agent_id) return fail('unread_only requires agent_id');
+        // Marking read moves past every returned seq, so a narrower filter would skip unread posts.
+        if (a.since !== undefined || a.to_agent || a.kind || a.unresolved_only) {
+          return fail('unread_only cannot be combined with since / to_agent / kind / unresolved_only');
+        }
+        return ok(readUnread(cdb, a.agent_id, { limit: a.limit }));
+      }
+      return ok(
         readBoard(cdb, {
           since: a.since,
           toAgent: a.to_agent,
@@ -728,7 +744,8 @@ export function buildServer(
           limit: a.limit,
           unresolvedOnly: a.unresolved_only,
         }),
-      ),
+      );
+    },
   );
 
   server.registerTool(
