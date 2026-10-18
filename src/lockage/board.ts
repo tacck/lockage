@@ -442,6 +442,106 @@ export function currentMaxBoardSeq(cdb: CoordDb): number {
 }
 
 /**
+ * Kinds that never wake an agent nor count as unread. They are records for publisher_status /
+ * lockage-publish, not messages to an agent; read_board still returns them as before.
+ */
+export const SYSTEM_BOARD_KINDS: ReadonlyArray<BoardMessage['kind']> = [
+  'ticket_ready',
+  'pr_opened',
+  'pr_updated',
+  'pr_merged',
+];
+
+/** An agent's board read position (board_cursors). */
+export interface BoardCursor {
+  directed_seq: number;
+  broadcast_seq: number;
+}
+
+/**
+ * Read an agent's read position, creating it on first sight. A new agent starts directed at 0 (so a
+ * post addressed to it before it started, e.g. a handoff_task to a not-yet-launched worker, is still
+ * unread) and broadcast at the current MAX(seq) (so past posts to everyone do not flood in).
+ * INSERT OR IGNORE keeps concurrent first sights from overwriting each other.
+ */
+export function getBoardCursor(cdb: CoordDb, agentId: string): BoardCursor {
+  cdb.db
+    .prepare(
+      `INSERT OR IGNORE INTO board_cursors (agent_id, directed_seq, broadcast_seq, updated_at)
+       VALUES (?, 0, (SELECT COALESCE(MAX(seq), 0) FROM board_messages), ?)`,
+    )
+    .run(agentId, unixNow());
+  const row = cdb.db
+    .prepare(`SELECT directed_seq, broadcast_seq FROM board_cursors WHERE agent_id = ?`)
+    .get(agentId) as unknown as BoardCursor;
+  return { directed_seq: row.directed_seq, broadcast_seq: row.broadcast_seq };
+}
+
+/** The WHERE clause and params shared by listUnread / countUnread. */
+function unreadWhere(cursor: BoardCursor, agentId: string): { sql: string; params: unknown[] } {
+  const kinds = SYSTEM_BOARD_KINDS.map(() => '?').join(', ');
+  return {
+    sql: `((to_agent = ? AND seq > ?) OR (to_agent IS NULL AND seq > ?))
+          AND author != ? AND kind NOT IN (${kinds})`,
+    params: [agentId, cursor.directed_seq, cursor.broadcast_seq, agentId, ...SYSTEM_BOARD_KINDS],
+  };
+}
+
+/** An agent's unread posts in seq ascending order (does not advance the read position). */
+export function listUnread(
+  cdb: CoordDb,
+  agentId: string,
+  opts: { limit?: number } = {},
+): BoardMessage[] {
+  const w = unreadWhere(getBoardCursor(cdb, agentId), agentId);
+  return cdb.db
+    .prepare(`SELECT * FROM board_messages WHERE ${w.sql} ORDER BY seq ASC LIMIT ?`)
+    .all(...(w.params as never[]), opts.limit ?? BOARD_READ_ALL_LIMIT) as unknown as BoardMessage[];
+}
+
+/** The number of an agent's unread posts (does not advance the read position). */
+export function countUnread(cdb: CoordDb, agentId: string): number {
+  const w = unreadWhere(getBoardCursor(cdb, agentId), agentId);
+  const row = cdb.db
+    .prepare(`SELECT COUNT(*) AS n FROM board_messages WHERE ${w.sql}`)
+    .get(...(w.params as never[])) as { n: number };
+  return row.n;
+}
+
+/**
+ * Advance an agent's read position past the posts just returned to it, separately for directed and
+ * broadcast. Only moves forward (MAX), so a stale caller cannot move it back. Posts not addressed to
+ * the agent are ignored.
+ */
+export function markBoardRead(cdb: CoordDb, agentId: string, messages: BoardMessage[]): void {
+  let directed = 0;
+  let broadcast = 0;
+  for (const m of messages) {
+    if (m.to_agent === agentId) directed = Math.max(directed, m.seq);
+    else if (m.to_agent === null) broadcast = Math.max(broadcast, m.seq);
+  }
+  if (directed === 0 && broadcast === 0) return;
+  getBoardCursor(cdb, agentId);
+  const db = cdb.db;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(
+      `UPDATE board_cursors
+          SET directed_seq = MAX(directed_seq, ?), broadcast_seq = MAX(broadcast_seq, ?), updated_at = ?
+        WHERE agent_id = ?`,
+    ).run(directed, broadcast, unixNow(), agentId);
+    db.exec('COMMIT');
+  } catch (e) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* already closed */
+    }
+    throw e;
+  }
+}
+
+/**
  * §4.8 wake — push a transient resume signal onto the pending queue.
  * Used for notifications we do not want to leave on the board, such as overlap (someone else steps into my area).
  * Called from publishDirty / the merge gate's needs_review, connecting the existing wake_targets enumeration to real delivery.
