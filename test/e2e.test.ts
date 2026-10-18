@@ -348,6 +348,15 @@ test('2-client e2e: a blocked task\'s handoff wakes to_agent via a board notific
   assert.equal(handoffMsg.to_agent, 'B', 'the handoff notification\'s recipient is not B');
   assert.equal(handoffMsg.ref_task_id, task.id, 'the handoff notification\'s ref_task_id does not point to the task');
 
+  // the same handoff does not wake B a second time (problem 2: the old extra board wake did)
+  const again = parse(
+    await b.client.callTool({
+      name: 'wait_for_unblock',
+      arguments: { agent_id: 'B', timeout_sec: 1 },
+    }),
+  );
+  assert.equal(again.woke_by, 'timeout', `B woke twice on one handoff (woke_by=${again.woke_by})`);
+
   // the arriving B can trace the predecessor's question (the reason it got stuck) via ref_task_id
   const q = parse(
     await b.client.callTool({

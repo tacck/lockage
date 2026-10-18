@@ -76,7 +76,6 @@ import {
   postBoard,
   readBoard,
   resolveQuestion,
-  wake,
   waitForUnblock,
   computePublisherStatus,
 } from './lockage/board.js';
@@ -349,16 +348,15 @@ export function buildServer(
         fromAgent: a.from_agent,
         toAgent: a.to_agent,
       });
-      // Only when the move is committed do we leave a trace on the board and wake to_agent (point B).
+      // Only when the move is committed do we leave a trace on the board, which wakes to_agent (point B).
       // handoffTask opens BEGIN IMMEDIATE internally, so to avoid a nested BEGIN we do the board
       // integration after success is confirmed (the atomicity of the state reassignment and the
       // notification are separate concerns).
       //   - post_board(kind='handoff', author=from, to_agent=to, ref_task_id): the arriving to_agent
       //     learns it was handed the task and can trace the predecessor's question via ref (D-3's
       //     directed board notification).
-      //   - wake(to, 'board'): immediately wake a to_agent waiting in wait_for_unblock (it would also
-      //     be caught by the board_messages seq diff, but this insures against a miss before the
-      //     long-poll starts; same style as needs_review).
+      //   No separate board wake: the handoff is unread for to_agent (directed posts count from seq 0
+      //   even before it has a read position), so its first wait_for_unblock returns on it.
       if (r.ok) {
         postBoard(cdb, {
           agentId: a.from_agent,
@@ -368,7 +366,6 @@ export function buildServer(
           body: `Handed task ${a.task_id} over from ${a.from_agent}. worktree: ${r.worktrees.join(', ') || '(none)'
             }. Check the stuck reason the predecessor left via read_board(kind='question', ref_task_id).`,
         });
-        wake(cdb, a.to_agent, 'board', { reason: 'handoff', task_id: a.task_id });
       }
       return ok(r);
     },
@@ -962,7 +959,7 @@ export function buildServer(
     'wait_for_unblock',
     {
       description:
-        'Wait once until one of the following happens: a task you are waiting on becomes ready; a board post addressed to you or to everyone (regardless of kind); an overlap with another agent; or timeout. Returns what woke you via woke_by. Use it instead of repeatedly polling lists.',
+        'Wait once until one of the following happens: a task you are waiting on becomes ready; an unread board post addressed to you or to everyone; an overlap with another agent; or timeout. Returns what woke you via woke_by. Unread is counted from where you last read, so a post that arrived while you were working or between waits still wakes you; the returned posts are then marked read. Posts addressed to you count from the start even before your first call (e.g. a handoff_task to you before you launched), posts to everyone from your first call. Your own posts and ticket_ready / pr_opened / pr_updated / pr_merged do not wake you (read_board still returns them). Use it instead of repeatedly polling lists.',
       inputSchema: {
         agent_id: z.string(),
         task_id: z.string().optional().describe('the task whose dependency resolution you are waiting for'),

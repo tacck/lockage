@@ -19,6 +19,7 @@ import {
   listUnread,
   countUnread,
   markBoardRead,
+  type BoardMessage,
 } from '../src/lockage/board.js';
 import { publishDirty, claimFiles } from '../src/lockage/files.js';
 
@@ -425,4 +426,76 @@ test('board_cursors: opening an existing DB without the table creates it, and re
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- wait_for_unblock from the stored read position ----
+
+const quickWait = (agentId: string, timeoutSec = 1) =>
+  waitForUnblock(cdb, { agentId, timeoutSec, pollMs: 20 });
+
+test('wait_for_unblock: a directed post that arrived while not waiting wakes the next wait (problem 1)', async () => {
+  assert.equal((await quickWait('A')).woke_by, 'timeout');
+  // A is "working" (not waiting) when B posts
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', kind: 'question', body: 'please check' });
+  const r = await quickWait('A');
+  assert.equal(r.woke_by, 'board');
+  assert.deepEqual(
+    (r.payload as BoardMessage[]).map((m) => m.body),
+    ['please check'],
+  );
+});
+
+test('wait_for_unblock: a broadcast between a timeout and the re-call still wakes', async () => {
+  assert.equal((await quickWait('A')).woke_by, 'timeout');
+  postBoard(cdb, { agentId: 'B', body: 'to everyone' });
+  const r = await quickWait('A');
+  assert.equal(r.woke_by, 'board');
+  assert.equal((r.payload as BoardMessage[])[0]?.body, 'to everyone');
+});
+
+test('wait_for_unblock: a post already returned does not wake the next wait', async () => {
+  getBoardCursor(cdb, 'A');
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'once' });
+  assert.equal((await quickWait('A')).woke_by, 'board');
+  assert.equal((await quickWait('A')).woke_by, 'timeout');
+  assert.equal(countUnread(cdb, 'A'), 0);
+});
+
+test('wait_for_unblock: a directed post before the agent ever appeared wakes its first wait (pre-start handoff)', async () => {
+  postBoard(cdb, { agentId: 'B', body: 'old broadcast' });
+  postBoard(cdb, { agentId: 'A', toAgent: 'W', kind: 'handoff', body: 'task handed to W' });
+  const r = await quickWait('W');
+  assert.equal(r.woke_by, 'board');
+  assert.deepEqual(
+    (r.payload as BoardMessage[]).map((m) => m.body),
+    ['task handed to W'],
+  );
+});
+
+test('wait_for_unblock: system kinds and my own posts do not wake', async () => {
+  getBoardCursor(cdb, 'A');
+  postBoard(cdb, { agentId: 'A', body: 'my own note' });
+  postBoard(cdb, { agentId: 'system', kind: 'ticket_ready', body: 'ready' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_opened', body: 'opened' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_updated', body: 'updated' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_merged', body: 'merged' });
+  assert.equal((await quickWait('A')).woke_by, 'timeout');
+});
+
+test('wait_for_unblock: a post plus a leftover board wake (old DB) wakes only once (problem 2)', async () => {
+  const p = waitForUnblock(cdb, { agentId: 'A', timeoutSec: 3, pollMs: 20 });
+  setTimeout(() => {
+    postBoard(cdb, { agentId: 'B', toAgent: 'A', kind: 'handoff', body: 'handoff' });
+    wake(cdb, 'A', 'board', { reason: 'handoff' }); // what the old handoff_task also stacked
+  }, 60);
+  assert.equal((await p).woke_by, 'board');
+  assert.equal((await quickWait('A')).woke_by, 'timeout', 'the leftover board wake woke A again');
+});
+
+test('wait_for_unblock: a leftover board wake alone (old DB) is still honored', async () => {
+  getBoardCursor(cdb, 'A');
+  wake(cdb, 'A', 'board', { reason: 'merge_needs_review' });
+  const r = await quickWait('A');
+  assert.equal(r.woke_by, 'board');
+  assert.deepEqual(r.payload, [{ reason: 'merge_needs_review' }]);
 });

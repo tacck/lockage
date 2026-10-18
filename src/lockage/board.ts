@@ -623,6 +623,9 @@ export interface UnblockResult {
   payload?: unknown;
 }
 
+/** The most unread posts one wait_for_unblock returns; the rest wake the next call. */
+const WAIT_BOARD_LIMIT = 100;
+
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -631,7 +634,9 @@ const sleep = (ms: number): Promise<void> =>
  * Internally it short-interval polls (sufficient for Phase 1 / a single process). Client-side polling disappears.
  *
  *   a) the waited task became ready (all deps done) → woke_by:"task_ready"
- *   b) a new board message for me or for everyone arrived → woke_by:"board"
+ *   b) an unread board message for me or for everyone (from my read position in board_cursors, so a
+ *      post that arrived while I was not waiting still counts) → woke_by:"board", and the read
+ *      position advances past the returned posts. System kinds and my own posts do not wake.
  *   c) overlap in my area (someone else's dirty/claim overlaps) → woke_by:"overlap"
  *   d) timeout → woke_by:"timeout"
  *
@@ -644,7 +649,6 @@ export async function waitForUnblock(
   const timeoutSec = args.timeoutSec ?? 60;
   const pollMs = args.pollMs ?? 500;
   const deadline = Date.now() + timeoutSec * 1000;
-  const cursor = currentMaxBoardSeq(cdb);
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -666,16 +670,17 @@ export async function waitForUnblock(
       };
     }
 
-    // b) a new board message for me / for everyone (seq delta). Or consume a board wake if stacked
-    //    (the merge gate's needs_review stacks it. the board_messages side can also pick it up, but insurance against misses).
-    const msgs = cdb.db
-      .prepare(
-        `SELECT * FROM board_messages
-          WHERE seq > ? AND (to_agent = ? OR to_agent IS NULL)
-          ORDER BY seq ASC`,
-      )
-      .all(cursor, args.agentId) as unknown as BoardMessage[];
-    if (msgs.length > 0) return { woke_by: 'board', payload: msgs };
+    // b) unread board messages for me / for everyone, counted from my stored read position.
+    //    Returned posts are marked read so the next wait does not return them again. Board wakes are
+    //    no longer stacked (handoff / needs_review rely on the post itself), but a DB from before may
+    //    still hold some: drain them here so the same notification does not wake twice, and still
+    //    honor them below when there is no unread post.
+    const unread = listUnread(cdb, args.agentId, { limit: WAIT_BOARD_LIMIT });
+    if (unread.length > 0) {
+      markBoardRead(cdb, args.agentId, unread);
+      takePendingWakes(cdb, args.agentId, 'board');
+      return { woke_by: 'board', payload: unread };
+    }
     const boardWakes = takePendingWakes(cdb, args.agentId, 'board');
     if (boardWakes.length > 0) {
       return {
