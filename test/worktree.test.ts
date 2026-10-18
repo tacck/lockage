@@ -555,7 +555,10 @@ test('reclaim_orphan_worktrees: not an orphan even if the ledger path diverges f
 // This sandbox's /tmp is not a symlink (realpathSync(mkdtempSync(...)) matches the input), so unless the test
 // explicitly creates a symlink, `path === canonicalPath` and the branch is skipped. The symlink this helper
 // creates fills that gap.
-function makeSymlinkedRepoPath(agentTag: string): {
+function makeSymlinkedRepoPath(
+  agentTag: string,
+  repoName = 'repo',
+): {
   linkRoot: string;
   repoViaLink: string;
   cleanup: () => void;
@@ -567,8 +570,9 @@ function makeSymlinkedRepoPath(agentTag: string): {
   if (!existsSync(linkRoot)) {
     symlinkSync(realRoot, linkRoot, 'dir');
   }
-  // the repo entity is the shared repoPath (= realRoot/repo). point at the same repo via the symlink.
-  const repoViaLink = join(linkRoot, 'repo');
+  // the repo entity defaults to the shared repoPath (= realRoot/repo); repoName picks another repo under
+  // root (e.g. an Issue #8 repo with a remote). point at the same repo via the symlink.
+  const repoViaLink = join(linkRoot, repoName);
   return {
     linkRoot,
     repoViaLink,
@@ -664,16 +668,16 @@ test('assign: with a via-symlink repoPath the canonicalPath !== path branch fire
 });
 
 // ── Review finding #1 (continued): a via-symlink re-call is reused via step2's post-normalization re-check ──
-// On a new assignment, step1's reuse SELECT queries with the un-normalized path so it does not hit via a symlink.
-// On the second call, step2 (re-SELECT by canonicalPath) hits and reuses; confirm the two-stage reuse decision
-// works as intended in a symlink environment.
-test('assign: a via-symlink re-call is reused via step2 (canonicalPath re-check) (#41)', () => {
+// On a new assignment the physical worktree does not exist yet, so step1 cannot realpath it and only step2
+// (re-SELECT by canonicalPath after creation) can match. On the second call the worktree exists, so step1
+// already hits by realpath; confirm the second call is reused and not double-registered via a symlink.
+test('assign: a via-symlink re-call is reused (canonicalPath lookup) (#41)', () => {
   const { repoViaLink, cleanup } = makeSymlinkedRepoPath('canon-reuse');
   try {
     const a = assignWorktree(cdb, { agentId: 'canon-reuse-agent', repoPath: repoViaLink });
     const b = assignWorktree(cdb, { agentId: 'canon-reuse-agent', repoPath: repoViaLink });
 
-    assert.equal(b.reused, true, 'even via a symlink the second time is reused (hits at step2)');
+    assert.equal(b.reused, true, 'even via a symlink the second time is reused');
     assert.equal(a.worktree_path, b.worktree_path, 'returns the same normalized path');
     assert.equal(
       listWorktrees(cdb, 'canon-reuse-agent').length,
@@ -1110,4 +1114,45 @@ test('assign (Issue #8): base_ref 省略 + remote ありで 2 回目は reused=t
   assert.notEqual(trackingAfter, secondRemoteSha, '進んだ origin/dev を fetch していない');
 
   git(repo, ['worktree', 'remove', '--force', first.worktree_path]);
+});
+
+// CR-001 (PR #26 review): the test above observes the reuse path's "no fetch" only when tmpdir itself goes
+// through a symlink (macOS /var → /private/var); where realpath matches the input (Linux /tmp) the old code
+// passed it too. Here the repo is referenced through an explicit symlink, so on any OS the ledger holds the
+// realpath while the joined path does not, and a reuse lookup by the un-normalized path alone would miss,
+// run the remote-follow fetch, and move origin/dev before the post-creation re-check returns reused=true.
+test('assign (Issue #8): symlink 経由の repoPath でも 2 回目は fetch 前に再利用され、追跡 ref が動かない', () => {
+  const repo = makeRepo('symreuse', 'main');
+  const firstRemoteSha = setupLaggingRemote(repo, 'symreuse');
+  const { repoViaLink, cleanup } = makeSymlinkedRepoPath('issue8-symreuse', basename(repo));
+  try {
+    const first = assignWorktree(cdb, { agentId: 'issue8-symreuse', repoPath: repoViaLink });
+    assert.equal(first.reused, false, '1 回目は新規割り当て');
+    assert.equal(first.base_ref_used, 'origin/dev');
+    // 前提: 台帳には realpath が入り、join したままのパスとは文字列が異なる。
+    const joined = join(dirname(repoViaLink), '.lockage-worktrees', basename(first.worktree_path));
+    assert.notEqual(first.worktree_path, joined, '前提: 保存値（realpath）と join したパスが異なる');
+
+    // origin を進めて push し、push で進んだ追跡 ref を 1 回目時点へ戻す（fetch が走れば再び進む）。
+    const laggingLocalSha = git(repo, ['rev-parse', '--verify', 'dev^{commit}']);
+    git(repo, ['reset', '-q', '--hard', firstRemoteSha]);
+    writeFileSync(join(repo, 'remote-only-2.txt'), 'advance again\n');
+    git(repo, ['add', '.']);
+    git(repo, ['commit', '-q', '-m', 'advance dev on remote again']);
+    const secondRemoteSha = git(repo, ['rev-parse', '--verify', 'dev^{commit}']);
+    git(repo, ['push', '-q', 'origin', 'dev']);
+    git(repo, ['reset', '-q', '--hard', laggingLocalSha]);
+    git(repo, ['update-ref', 'refs/remotes/origin/dev', firstRemoteSha]);
+
+    const second = assignWorktree(cdb, { agentId: 'issue8-symreuse', repoPath: repoViaLink });
+    assert.equal(second.reused, true, '2 回目は再利用');
+    assert.equal(second.worktree_path, first.worktree_path, '同じ worktree を返す');
+    const tracking = git(repo, ['rev-parse', '--verify', 'refs/remotes/origin/dev']);
+    assert.equal(tracking, firstRemoteSha, '再利用パスで fetch が走らないため追跡 ref は不変');
+    assert.notEqual(tracking, secondRemoteSha, '進んだ origin/dev を fetch していない');
+
+    git(repo, ['worktree', 'remove', '--force', first.worktree_path]);
+  } finally {
+    cleanup();
+  }
 });
