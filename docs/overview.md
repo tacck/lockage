@@ -32,6 +32,7 @@ flowchart LR
     end
 
     PUB["lockage-publish<br/>(CLI / not resident)"]
+    GH["GitHub<br/>(remote / PR)"]
 
     A1 <-->|MCP tool call| MCP
     A2 <-->|MCP tool call| MCP
@@ -40,7 +41,7 @@ flowchart LR
     A1 -.edit.-> WTA
     A2 -.edit.-> WTB
     PUB <-->|read_board / post_board| MCP
-    PUB -->|push & gh pr create| MAIN
+    PUB -->|push the integration branch & create a PR| GH
 ```
 
 Key points:
@@ -63,7 +64,7 @@ Posts stacked in the `board_messages` table that do not disappear. You write the
 |---|---|---|---|
 | `note` | agent | self-introduction / contact memo | wakes if unread |
 | `question` | agent | the reason you are stuck / a question (tie it to the target task via `ref_task_id`) | wakes if unread |
-| `handoff` | server / agent | task handoff notice | wakes if unread |
+| `handoff` | server / agent | task handoff notice (a needs_review send-back from system uses the same kind) | wakes if unread |
 | `ticket_ready` | **server (system)** | all tasks under a ticket are done; it is ready to become a PR | does not wake (a record for PR publishing) |
 | `pr_opened` / `pr_updated` / `pr_merged` | **lockage-publish** | records of the PR's state transitions | does not wake |
 
@@ -154,13 +155,17 @@ flowchart TD
     GATE -->|no conflict| TICKET{"has a ticket_id?"}
     GATE -->|conflict candidate| NR["send back as needs_review<br/>(task stays in_progress)"]
     TICKET -->|yes (even one)| IB["to the ticket integration branch<br/>lockage/ticket/&lt;short id&gt; (1-B)"]
-    TICKET -->|no (a minor task)| BASE["merge straight to the base branch (1-C)"]
+    TICKET -->|no (a minor task)| SMALL{"has base not advanced<br/>past the branch point?"}
+    SMALL -->|yes (no divergence)| BASE["merge straight to the base branch (1-C)"]
+    SMALL -->|no (diverged)| IB
     IB --> DONE["set the task to done"]
     BASE --> DONE
     DONE --> READY{"all of the ticket's tasks done?"}
     READY -->|yes| TR["system posts ticket_ready to the board"]
     DONE --> WAKE["a task_ready wake to the assignees of<br/>downstream tasks this one was blocking"]
 ```
+
+An immediate merge (1-C) happens only for a minor task with no ticket_id **and** when base has not advanced past the branch point (no divergence). If base has advanced, or the 3-way precheck turns up conflict candidates, it goes through the same serial gate (the 1-B mechanism) as tasks under a ticket before merging to base.
 
 ### 4.1 The send-back (needs_review) notice
 

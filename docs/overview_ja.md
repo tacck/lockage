@@ -32,6 +32,7 @@ flowchart LR
     end
 
     PUB["lockage-publish<br/>(CLI / 常駐しない)"]
+    GH["GitHub<br/>(リモート / PR)"]
 
     A1 <-->|MCP ツール呼び出し| MCP
     A2 <-->|MCP ツール呼び出し| MCP
@@ -40,7 +41,7 @@ flowchart LR
     A1 -.編集.-> WTA
     A2 -.編集.-> WTB
     PUB <-->|read_board / post_board| MCP
-    PUB -->|push & gh pr create| MAIN
+    PUB -->|統合ブランチを push & PR 作成| GH
 ```
 
 ポイント:
@@ -63,7 +64,7 @@ flowchart LR
 |---|---|---|---|
 | `note` | エージェント | 自己紹介・連絡メモ | 未読なら起こす |
 | `question` | エージェント | 行き詰まりの理由・質問（`ref_task_id` で対象タスクに紐付け） | 未読なら起こす |
-| `handoff` | サーバ / エージェント | タスクの引き継ぎ通知 | 未読なら起こす |
+| `handoff` | サーバ / エージェント | タスクの引き継ぎ通知（system からの needs_review 差し戻しも同じ kind） | 未読なら起こす |
 | `ticket_ready` | **サーバ（system）** | チケット配下の全タスクが done。PR 化の準備ができた | 起こさない（PR 化の記録） |
 | `pr_opened` / `pr_updated` / `pr_merged` | **lockage-publish** | PR の状態遷移の記録 | 起こさない |
 
@@ -154,13 +155,17 @@ flowchart TD
     GATE -->|衝突なし| TICKET{"ticket_id あり?"}
     GATE -->|衝突候補あり| NR["needs_review で差し戻し<br/>（タスクは in_progress のまま）"]
     TICKET -->|あり（1 つでも）| IB["チケット統合ブランチ<br/>lockage/ticket/&lt;短縮ID&gt; へ (1-B)"]
-    TICKET -->|なし（軽微タスク）| BASE["base ブランチへ即マージ (1-C)"]
+    TICKET -->|なし（軽微タスク）| SMALL{"base が分岐点から<br/>進んでいない?"}
+    SMALL -->|はい（乖離なし）| BASE["base ブランチへ即マージ (1-C)"]
+    SMALL -->|いいえ（乖離あり）| IB
     IB --> DONE["タスクを done に"]
     BASE --> DONE
     DONE --> READY{"チケット全タスク done?"}
     READY -->|はい| TR["system が ticket_ready を board へ"]
     DONE --> WAKE["このタスクが塞いでいた<br/>下流タスクの担当へ task_ready wake"]
 ```
+
+即マージ（1-C）になるのは、ticket なしの軽微タスクで **かつ base が分岐点から進んでいない（乖離なし）** ときだけです。base が進んでいる、あるいは 3-way プレチェックで衝突候補が出た場合は、チケット配下のタスクと同じ直列ゲート（1-B の仕組み）を通ってから base にマージされます。
 
 ### 4.1 差し戻し（needs_review）の通知
 
