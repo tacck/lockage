@@ -8,7 +8,7 @@ When you run several agents on the same repository at once, you normally hit pro
 
 It is a tool aimed at collaboration on a single host (one personal machine).
 
-> This document is for people getting started with lockage. For how to develop, build, and test lockage itself, see [`docs/development.md`](docs/development.md); for the operational details of publishing PRs (`lockage-publish`), see [`docs/publishing.md`](docs/publishing.md); for releasing the npm package, see [`docs/releasing.md`](docs/releasing.md).
+> This document is for people getting started with lockage. For a diagrammed picture of the whole system and how agents exchange messages, see [`docs/overview.md`](docs/overview.md). For how to develop, build, and test lockage itself, see [`docs/development.md`](docs/development.md); for the operational details of publishing PRs (`lockage-publish`), see [`docs/publishing.md`](docs/publishing.md); for releasing the npm package, see [`docs/releasing.md`](docs/releasing.md).
 
 ---
 
