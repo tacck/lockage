@@ -1,5 +1,8 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openDb, migrate, unixNow, type CoordDb } from '../src/db/index.js';
 import { createTask, claimTask, releaseTask } from '../src/lockage/claim.js';
 import {
@@ -12,6 +15,10 @@ import {
   takePendingWakes,
   isReady,
   waitForUnblock,
+  getBoardCursor,
+  listUnread,
+  countUnread,
+  markBoardRead,
 } from '../src/lockage/board.js';
 import { publishDirty, claimFiles } from '../src/lockage/files.js';
 
@@ -320,4 +327,102 @@ test('claim→release does not affect board/wake (regression)', () => {
   const c = claimTask(cdb, t.id, 'A', t.version);
   assert.equal(c.ok, true);
   assert.equal(releaseTask(cdb, t.id, 'A').ok, true);
+});
+
+// ---- board read position (board_cursors) ----
+
+test('unread: counts posts addressed to me and to everyone, but not to others, my own, or system kinds', () => {
+  getBoardCursor(cdb, 'A'); // first sight at seq 0
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', kind: 'question', body: 'to A' });
+  postBoard(cdb, { agentId: 'B', body: 'to everyone' });
+  postBoard(cdb, { agentId: 'B', toAgent: 'C', body: 'to C' });
+  postBoard(cdb, { agentId: 'A', body: 'my own' });
+  postBoard(cdb, { agentId: 'system', kind: 'ticket_ready', body: 'ready' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_opened', body: 'opened' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_updated', body: 'updated' });
+  postBoard(cdb, { agentId: 'publisher', kind: 'pr_merged', body: 'merged' });
+
+  assert.deepEqual(
+    listUnread(cdb, 'A').map((m) => m.body),
+    ['to A', 'to everyone'],
+  );
+  assert.equal(countUnread(cdb, 'A'), 2);
+  // system kinds are still readable through the normal read_board
+  assert.equal(readBoard(cdb, { kind: 'ticket_ready' }).messages.length, 1);
+});
+
+test('unread: a new agent starts directed at 0 and broadcast at the latest seq', () => {
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', kind: 'handoff', body: 'handoff before start' });
+  postBoard(cdb, { agentId: 'B', body: 'old broadcast' });
+
+  const cursor = getBoardCursor(cdb, 'A');
+  assert.deepEqual(cursor, { directed_seq: 0, broadcast_seq: 2 });
+  assert.deepEqual(
+    listUnread(cdb, 'A').map((m) => m.body),
+    ['handoff before start'],
+  );
+
+  // a broadcast after first sight is unread
+  postBoard(cdb, { agentId: 'B', body: 'new broadcast' });
+  assert.deepEqual(
+    listUnread(cdb, 'A').map((m) => m.body),
+    ['handoff before start', 'new broadcast'],
+  );
+  // the first-sight position does not move on later reads
+  assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 0, broadcast_seq: 2 });
+});
+
+test('markBoardRead: advances directed and broadcast separately, only forward, and does not touch others', () => {
+  getBoardCursor(cdb, 'A');
+  getBoardCursor(cdb, 'C');
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd1' }); // seq 1
+  postBoard(cdb, { agentId: 'B', body: 'b1' }); // seq 2
+  postBoard(cdb, { agentId: 'B', toAgent: 'A', body: 'd2' }); // seq 3
+
+  const unread = listUnread(cdb, 'A');
+  markBoardRead(cdb, 'A', unread.slice(0, 2)); // d1, b1
+  assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 1, broadcast_seq: 2 });
+  assert.deepEqual(
+    listUnread(cdb, 'A').map((m) => m.body),
+    ['d2'],
+  );
+
+  markBoardRead(cdb, 'A', listUnread(cdb, 'A'));
+  assert.equal(countUnread(cdb, 'A'), 0);
+
+  // a stale (older) mark does not move the position back
+  markBoardRead(cdb, 'A', unread.slice(0, 1));
+  assert.deepEqual(getBoardCursor(cdb, 'A'), { directed_seq: 3, broadcast_seq: 2 });
+
+  // C's position is untouched; the broadcast is still unread for C
+  assert.deepEqual(getBoardCursor(cdb, 'C'), { directed_seq: 0, broadcast_seq: 0 });
+  assert.deepEqual(
+    listUnread(cdb, 'C').map((m) => m.body),
+    ['b1'],
+  );
+});
+
+test('board_cursors: opening an existing DB without the table creates it, and reopening is idempotent', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lockage-cursor-'));
+  const path = join(dir, 'db.sqlite');
+  try {
+    const first = openDb({ path, hostId: 'host-test' });
+    postBoard(first, { agentId: 'B', toAgent: 'A', body: 'kept' });
+    first.db.exec('DROP TABLE board_cursors'); // reproduce a DB from before this table
+    first.close();
+
+    const second = openDb({ path, hostId: 'host-test' });
+    assert.deepEqual(
+      listUnread(second, 'A').map((m) => m.body),
+      ['kept'],
+    );
+    markBoardRead(second, 'A', listUnread(second, 'A'));
+    second.close();
+
+    const third = openDb({ path, hostId: 'host-test' });
+    assert.equal(countUnread(third, 'A'), 0, 'the read position survives a reopen');
+    third.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
