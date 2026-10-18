@@ -203,6 +203,48 @@ test('3-way precheck: if files touched by mainline intersect the dirty set, send
   assert.deepEqual(takePendingWakes(cdb, 'A', 'board'), []);
 });
 
+test('task_done: the caller\'s own send-back comes back in the result only, not also on the board', () => {
+  const t = createTask(cdb, { repo: 'repo', title: 'feat' });
+  const w = assignWorktree(cdb, { agentId: 'A', repoPath, taskId: t.id });
+  claimTask(cdb, t.id, 'A', t.version);
+  commitInWorktree(w.worktree_path, 'shared.txt', 'from-A\n');
+  publishDirty(cdb, { agentId: 'A', worktreePath: w.worktree_path, files: ['shared.txt'] });
+  commitOnMain('shared.txt', 'from-main\n'); // conflict candidate → 1-B → needs_review
+
+  const r = onTaskDone(cdb, {
+    agentId: 'A',
+    worktreePath: w.worktree_path,
+    branch: w.branch,
+    repo: repoPath,
+    taskId: t.id,
+  });
+  assert.ok(r.ok);
+  assert.deepEqual(
+    r.needs_review.map((n) => n.task_id),
+    [t.id],
+  );
+  assert.deepEqual(listUnread(cdb, 'A'), [], 'A got the same send-back twice (result + board)');
+  assert.equal(listMergeQueue(cdb, 'needs_review').length, 1, 'the send-back is still recorded');
+});
+
+test('process_merge_queue driven by one agent still posts another assignee\'s send-back to the board', () => {
+  const tB = createTask(cdb, { repo: 'repo', title: 'B' });
+  const wB = assignWorktree(cdb, { agentId: 'B', repoPath, taskId: tB.id });
+  commitInWorktree(wB.worktree_path, 'conflict.txt', 'B\n');
+  publishDirty(cdb, { agentId: 'B', worktreePath: wB.worktree_path, files: ['conflict.txt'] });
+  commitOnMain('conflict.txt', 'main\n');
+  enqueueMerge(cdb, { agentId: 'B', worktreePath: wB.worktree_path, branch: wB.branch, repo: repoPath, taskId: tB.id });
+
+  // A's task_done drives the queue and hits B's item: B only learns about it from the board
+  const r = processMergeQueue(cdb, { caller: 'A' });
+  assert.deepEqual(r.needs_review.map((n) => n.task_id), [tB.id]);
+  assert.deepEqual(
+    listUnread(cdb, 'B').map((m) => [m.author, m.kind, m.ref_task_id]),
+    [['system', 'handoff', tB.id]],
+  );
+  assert.deepEqual(listUnread(cdb, 'A'), []);
+});
+
 test('process_merge_queue: serial processing in seq ascending (mixed: 1 auto-merge + 1 send-back)', () => {
   // A is a non-conflicting file, B is a file that conflicts with main
   const tA = createTask(cdb, { repo: 'repo', title: 'A' });

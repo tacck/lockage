@@ -189,7 +189,7 @@ Board posts are tracked per agent as read / unread, so a post that arrives while
 `heartbeat` returns `unread_count` and `unread_preview` (the newest 3) without marking them read.
 - When `unread_count > 0`, read them with `read_board(agent_id, unread_only:true)` at the next break.
   It returns all unread posts in `seq` order (up to 100 per call; the rest come back on the next call) and marks them read.
-  In the returned list, handle `question` and `handoff` first; a `handoff` from `system` is a `needs_review` send-back.
+  In the returned list, handle `question` and `handoff` first. A `handoff` is one of two things; see "How to tell the two kinds of handoff apart" below.
 - Your own posts and `ticket_ready` / `pr_*` are not counted as unread.
 - Posts to everyone count from your first lockage call with your `agent_id` (normally the `post_board` that names you right after startup), so name yourself before anything else.
 
@@ -198,8 +198,16 @@ Board posts are tracked per agent as read / unread, so a post that arrives while
 Before looking for the next job, call `wait_for_unblock(agent_id)` once.
 It wakes on unread posts too, including ones that arrived while you were working, and marks the returned posts read.
 Do not keep hitting `list_tasks` in an empty loop.
-- If there is a message with `woke_by:"board"` and `kind:"handoff"`,
-  confirm the claim has moved with `list_tasks(assignee:<your agent_id>, status:"in_progress")`,
+- If there is a message with `woke_by:"board"` and `kind:"handoff"`, tell the two kinds apart (below).
+
+### How to tell the two kinds of handoff apart
+
+Look at the `author` of a `kind:"handoff"` post (whether `wait_for_unblock` returned it or you read it with `read_board`).
+- **`author:"system"` = a `needs_review` send-back you have not seen.** Your own `task_done` returns its send-back in the result
+  and does not post it, so a board post means someone else's merge run hit your task. The body lists the files likely to conflict
+  and `ref_task_id` is the task: resolve them in that task's worktree, re-commit, and re-run `task_done`.
+- **Any other `author` = a task handed over to you (`handoff_task`).**
+  Confirm the claim has moved with `list_tasks(assignee:<your agent_id>, status:"in_progress")`,
   then read the predecessor's `question` with `read_board` and
   continue from where the worktree left off.
 
