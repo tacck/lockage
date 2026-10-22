@@ -190,7 +190,14 @@ function makeSlowAdapter(onOpen: () => void): PublishAdapter & { openedHeads: st
     async prState() {
       return 'OPEN';
     },
+    // Issue #31: インタフェース拡張に追従（publish 側テストでは reconcile 専用メソッドは呼ばれない）。
+    async prView() {
+      return { state: 'OPEN' as const, headRefName: null };
+    },
     async deleteRemoteBranch() { },
+    async repoIdentity() {
+      return 'acme/repo';
+    },
   };
 }
 

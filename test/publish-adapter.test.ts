@@ -51,8 +51,12 @@ function initRepoWithBareOrigin(root: string): { repo: string; bare: string } {
  */
 function writeFakeGh(dir: string): string {
   const path = join(dir, 'fake-gh.sh');
+  // Issue #31:
+  //  - pr view <n> --json state,headRefName → {"state":..,"headRefName":..}（GH_FAKE_HEAD、既定 '' = null 扱い）
+  //    （--json に headRefName が含まれるときだけ headRefName を出力し、state のみの既存呼び出しとは出力を分ける）
+  //  - repo view --json nameWithOwner → {"nameWithOwner": GH_FAKE_NWO}（未設定なら acme/repo）
   const script = `#!/usr/bin/env bash
-# $1=pr $2=create|list|view
+# $1=pr|repo $2=create|list|view
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
   if [ -n "\${GH_FAKE_CREATE_FAIL:-}" ]; then
     echo "\${GH_FAKE_CREATE_FAIL}" >&2
@@ -66,7 +70,16 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  echo "{\\"state\\": \\"\${GH_FAKE_STATE:-OPEN}\\"}"
+  # --json に headRefName が含まれていれば state + headRefName を返す（prView 用）。
+  if [[ "$*" == *headRefName* ]]; then
+    echo "{\\"state\\": \\"\${GH_FAKE_STATE:-OPEN}\\", \\"headRefName\\": \\"\${GH_FAKE_HEAD:-}\\"}"
+  else
+    echo "{\\"state\\": \\"\${GH_FAKE_STATE:-OPEN}\\"}"
+  fi
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  echo "{\\"nameWithOwner\\": \\"\${GH_FAKE_NWO:-acme/repo}\\"}"
   exit 0
 fi
 echo "unexpected fake gh args: $*" >&2
@@ -121,7 +134,9 @@ test('GitlabPublishAdapter: unimplemented in Phase 1, every method errors explic
   await assert.rejects(() => gl.openPr({ repo: '/r', base: 'main', head: 'b', title: 't', bodyFile: '/f' }), /not implemented/i);
   await assert.rejects(() => gl.findPrByHead('/r', 'b'), /not implemented/i);
   await assert.rejects(() => gl.prState('/r', 1), /not implemented/i);
+  await assert.rejects(() => gl.prView('/r', 1), /not implemented/i);
   await assert.rejects(() => gl.deleteRemoteBranch('/r', 'b'), /not implemented/i);
+  await assert.rejects(() => gl.repoIdentity('/r'), /not implemented/i);
 });
 
 // ── GithubPublishAdapter: fake gh + real git (bare origin) ───────────────────
@@ -240,6 +255,62 @@ test('prState: normalize and return the state from gh pr view', async (t) => {
   }
   // default (unset) is OPEN
   assert.equal(await gh.prState(repo, 42), 'OPEN');
+});
+
+// ── Issue #31: prView (state + headRefName) / repoIdentity (nameWithOwner) ──────────
+
+test('prView: return the normalized state and headRefName from gh pr view --json state,headRefName (Issue #31)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-pub-prview-'));
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+  const { repo } = initRepoWithBareOrigin(workdir);
+  const gh = new GithubPublishAdapter(writeFakeGh(workdir));
+
+  process.env.GH_FAKE_STATE = 'MERGED';
+  process.env.GH_FAKE_HEAD = 'lockage/ticket/01ABC-XYZ';
+  try {
+    const v = await gh.prView(repo, 42);
+    assert.deepEqual(v, { state: 'MERGED', headRefName: 'lockage/ticket/01ABC-XYZ' });
+  } finally {
+    delete process.env.GH_FAKE_STATE;
+    delete process.env.GH_FAKE_HEAD;
+  }
+});
+
+test('prView: an empty headRefName becomes null (照合不能 → 呼び出し側で安全側に倒せる) (Issue #31)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-pub-prview-empty-'));
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+  const { repo } = initRepoWithBareOrigin(workdir);
+  const gh = new GithubPublishAdapter(writeFakeGh(workdir));
+
+  // GH_FAKE_HEAD 未設定 = headRefName:'' → null に正規化。state 既定は OPEN。
+  const v = await gh.prView(repo, 42);
+  assert.equal(v.state, 'OPEN');
+  assert.equal(v.headRefName, null, 'empty headRefName は null');
+});
+
+test('repoIdentity: return nameWithOwner from gh repo view --json nameWithOwner (Issue #31)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-pub-identity-'));
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+  const { repo } = initRepoWithBareOrigin(workdir);
+  const gh = new GithubPublishAdapter(writeFakeGh(workdir));
+
+  process.env.GH_FAKE_NWO = 'acme/widgets';
+  try {
+    assert.equal(await gh.repoIdentity(repo), 'acme/widgets');
+  } finally {
+    delete process.env.GH_FAKE_NWO;
+  }
+  // default (unset) is acme/repo
+  assert.equal(await gh.repoIdentity(repo), 'acme/repo');
+});
+
+test('repoIdentity: null on gh failure (best-effort = 照合不能時は安全側で skip に倒せる) (Issue #31)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-pub-identity-fail-'));
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+  const { repo } = initRepoWithBareOrigin(workdir);
+  // ghCmd を存在しないパスにして execFileSync を失敗させる（認証/ネットワーク失敗を模す）。
+  const gh = new GithubPublishAdapter(join(workdir, 'no-such-gh'));
+  assert.equal(await gh.repoIdentity(repo), null, 'gh 失敗時は null');
 });
 
 // ── verification of the review fixes (M-1 / L-3) ──────────────────────────────────────

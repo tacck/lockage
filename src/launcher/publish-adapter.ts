@@ -27,6 +27,18 @@ export interface PrRef {
 }
 
 /**
+ * Issue #31 の二重防御（補助）: PR の state に加えて head ブランチ名を返す。
+ * reconcile の MERGED 分岐で、PR の headRefName が当該チケットの統合ブランチ
+ * （lockage/ticket/<short-id>）と一致するかを照合するために使う。
+ * headRefName が取得できないときは null（照合不能＝安全側で skip に倒す）。
+ */
+export interface PrView {
+  state: PrState;
+  /** PR の head ブランチ名。取得できなければ null。 */
+  headRefName: string | null;
+}
+
+/**
  * Indicates that openPr could not create a PR because there is "no diff from base".
  * The caller (publishReadyTickets) folds this into a per-ticket skip (does not crash the loop).
  */
@@ -75,8 +87,21 @@ export interface PublishAdapter {
   /** Look up the current state from the PR number (merge detection = the cleanup trigger). */
   prState(repo: string, number: number): Promise<PrState>;
 
+  /**
+   * Issue #31 二重防御: PR 番号から state と head ブランチ名を取得する。
+   * reconcile が MERGED 判定後に head とチケットの統合ブランチを照合するために使う。
+   */
+  prView(repo: string, number: number): Promise<PrView>;
+
   /** Delete the remote integration branch (post-merge cleanup). */
   deleteRemoteBranch(repo: string, branch: string): Promise<void>;
+
+  /**
+   * Issue #31 主防御: --repo-path の origin が指す owner/repo（nameWithOwner）を返す。
+   * reconcile が pr_opened 本文 URL の owner/repo と照合し、台帳を共有する別リポジトリの
+   * 同番号 PR を誤処理しないために使う。認証・ネットワーク失敗時は best-effort で null。
+   */
+  repoIdentity(repo: string): Promise<string | null>;
 }
 
 /** Normalize the raw gh/glab state string into a PrState. */
@@ -208,8 +233,35 @@ export class GithubPublishAdapter implements PublishAdapter {
     }
   }
 
+  async prView(repo: string, number: number): Promise<PrView> {
+    // gh pr view <n> --json state,headRefName で state と head ブランチ名を同時に取得する。
+    // head が取れないとき（空/パース失敗）は headRefName:null にして、呼び出し側で安全側に倒せるようにする。
+    try {
+      const raw = this.gh(repo, ['pr', 'view', String(number), '--json', 'state,headRefName']);
+      const obj = JSON.parse(raw) as { state?: string; headRefName?: string };
+      const head = obj.headRefName && obj.headRefName.trim() ? obj.headRefName.trim() : null;
+      return { state: normalizeState(obj.state ?? ''), headRefName: head };
+    } catch {
+      // ネットワーク/認証失敗やパース失敗は OPEN 扱い（MERGED に倒さない）＋ head 不明にして安全側へ。
+      return { state: 'OPEN', headRefName: null };
+    }
+  }
+
   async deleteRemoteBranch(repo: string, branch: string): Promise<void> {
     git(repo, ['push', 'origin', '--delete', branch]);
+  }
+
+  async repoIdentity(repo: string): Promise<string | null> {
+    // gh repo view --json nameWithOwner で CWD の origin が指す owner/repo を取得する（best-effort）。
+    // 認証・ネットワーク失敗やパース失敗時は null（照合不能＝呼び出し側で安全側に倒す）。
+    try {
+      const raw = this.gh(repo, ['repo', 'view', '--json', 'nameWithOwner']);
+      const obj = JSON.parse(raw) as { nameWithOwner?: string };
+      const id = obj.nameWithOwner && obj.nameWithOwner.trim() ? obj.nameWithOwner.trim() : null;
+      return id;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -238,7 +290,13 @@ export class GitlabPublishAdapter implements PublishAdapter {
   async prState(): Promise<PrState> {
     this.notImplemented();
   }
+  async prView(): Promise<PrView> {
+    this.notImplemented();
+  }
   async deleteRemoteBranch(): Promise<void> {
+    this.notImplemented();
+  }
+  async repoIdentity(): Promise<string | null> {
     this.notImplemented();
   }
 }
