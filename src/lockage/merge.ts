@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { ulid } from 'ulid';
 import { unixNow, type CoordDb } from '../db/index.js';
 import { fileIntersect } from './globs.js';
-import { git, resolveBaseBranch, short } from './git.js';
+import { git, resolveBaseBranch, short, resolveRemoteName, remoteTrackingRef } from './git.js';
 import { releaseWorktree } from './worktree.js';
 import { postBoard, wake, isReady, resolveQuestionsForTask } from './board.js';
 import { completeTask, claimTask } from './claim.js';
@@ -92,7 +92,8 @@ export type OnTaskDoneResult =
     | 'no_active_worktree' // no active assignment for (agent_id, worktree_path)
     | 'branch_is_base' // branch equals the base branch (prevents accidental merge into the main tree)
     | 'not_assignee' // the caller is not the assignee (another agent owns it, or the worktree assignment is not tied to that task and is not eligible for rescue). Repeating the same call will not go through
-    | 'lease_expired'; // the lease-expiry rescue re-claim lost a race, but the task is still open and unassigned (safe to retry)
+    | 'lease_expired' // the lease-expiry rescue re-claim lost a race, but the task is still open and unassigned (safe to retry)
+    | 'base_unresolved'; // Issue #32: base ブランチを解決できない／統合ブランチの切り元（ローカルにもリモート追跡 ref にも）が存在しない。base_ref 等で base を明示して再実行する（main への決め打ちはしない）
     detail: string;
   };
 
@@ -648,7 +649,29 @@ function ensureIntegrationBranch(
     exists = false;
   }
   if (!exists) {
-    git(repo, ['branch', branchName, baseBranch]);
+    // Issue #32: 切り元 baseBranch がローカル refs/heads に無いと `git branch <name> <base>` が
+    // `fatal: not a valid object name` で落ちる。ローカルに無ければ origin/<base>（リモート追跡 ref）を
+    // 切り元に使うフォールバックを入れる。両方無ければ素の git fatal でなく原因の分かる Error を投げる。
+    let startPoint = baseBranch;
+    let localExists = false;
+    try {
+      git(repo, ['show-ref', '--verify', '--quiet', `refs/heads/${baseBranch}`]);
+      localExists = true;
+    } catch {
+      localExists = false;
+    }
+    if (!localExists) {
+      const remote = resolveRemoteName(repo);
+      const tracking = remote ? remoteTrackingRef(repo, remote, baseBranch) : null;
+      if (!tracking) {
+        throw new Error(
+          `base ブランチ '${baseBranch}' がローカル refs/heads にもリモート追跡 ref にも見つかりませんでした（repo='${repo}'）。` +
+          `統合ブランチの切り元が存在しません。base_ref 等で base を明示するか、リモートを fetch してください。`,
+        );
+      }
+      startPoint = tracking; // 例: 'origin/develop'
+    }
+    git(repo, ['branch', branchName, startPoint]);
   }
   return branchName;
 }
@@ -823,11 +846,17 @@ export function onTaskDone(cdb: CoordDb, item: MergeArgs): OnTaskDoneResult {
   item = resolved;
 
   // 2) Is branch not the same as the base branch (do not target main etc. for a direct merge)?
+  // Issue #32: base を解決できないとき `main` 決め打ちで握り潰すと、存在しない main を切り元にして
+  // 後続の git が fatal で落ちる。決め打ちをやめ、解決不能なら分かりやすい失敗（base_unresolved）を返す。
   let baseBranch: string;
   try {
     baseBranch = resolveBaseBranch(item.repo);
-  } catch {
-    baseBranch = 'main';
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'base_unresolved',
+      detail: e instanceof Error ? e.message : String(e),
+    };
   }
   if (item.branch === baseBranch) {
     return {
@@ -912,7 +941,18 @@ export function onTaskDone(cdb: CoordDb, item: MergeArgs): OnTaskDoneResult {
   // ticket integration branch. Only minor tasks without a ticket_id merge directly to base (no targetBranch).
   const target = decideTarget(cdb, item);
   if (target.isIntegration) {
-    const intBranch = ensureIntegrationBranch(cdb, target.ticketId!, item.repo, baseBranch);
+    // Issue #32: ensureIntegrationBranch は切り元 base がローカルにもリモート追跡 ref にも無いと
+    // Error を投げる。素の git fatal が task_done ハンドラまで漏れないよう base_unresolved にまとめる。
+    let intBranch: string;
+    try {
+      intBranch = ensureIntegrationBranch(cdb, target.ticketId!, item.repo, baseBranch);
+    } catch (e) {
+      return {
+        ok: false,
+        reason: 'base_unresolved',
+        detail: e instanceof Error ? e.message : String(e),
+      };
+    }
     item = { ...item, targetBranch: intBranch };
   }
 

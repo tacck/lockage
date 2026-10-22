@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import {
   resolveBaseBranch,
   resolveRemoteName,
+  resolveRemoteDefaultBranch,
   fetchBase,
   remoteTrackingRef,
   countBehind,
@@ -79,9 +80,10 @@ test('if there is no main but only master, pick up master', () => {
   assert.equal(resolveBaseBranch(repoPath), 'master');
 });
 
-test('if none of the candidates exist, fall back to main', () => {
+test('Issue #32: if nothing can be resolved locally or via remote, it throws (no main fallback)', () => {
+  // remote も origin/HEAD も無く、ローカルに dev/stg/main/master も無い → (5) で Error。
   initRepo('trunk');
-  assert.equal(resolveBaseBranch(repoPath), 'main');
+  assert.throws(() => resolveBaseBranch(repoPath), /base/);
 });
 
 // ── Issue #8: remote 追従ヘルパー ──────────────────────────────────────────────
@@ -114,6 +116,82 @@ function setupLaggingRemote(): string {
   git(repoPath, ['reset', '-q', '--hard', 'HEAD~1']);
   return bare;
 }
+
+// ── Issue #32: origin/HEAD（リモート既定ブランチ）とリモート追跡 ref からの base 解決 ───────────
+/**
+ * ローカルの bare リポジトリを remote として用意し、既定ブランチを <branch> にして push する。
+ * bare 側で `git symbolic-ref HEAD refs/heads/<branch>` を設定し、ローカルで fetch 後に
+ * `git remote set-head origin -a` で `refs/remotes/origin/HEAD` を解決できる状態を作る。
+ *
+ * initRepo は呼び出し側で <branch> を初期ブランチにして済ませておくこと（ローカルに <branch> が
+ * 存在する前提）。origin/<branch> のリモート追跡 ref と origin/HEAD の両方が用意される。
+ */
+function setupRemoteWithDefaultBranch(branch: string): string {
+  const bare = join(root, 'remote-default.git');
+  mkdirSync(bare);
+  git(bare, ['init', '-q', '--bare', '-b', branch]);
+  // bare 側の HEAD を明示（origin/HEAD の指す先を <branch> にする）。
+  git(bare, ['symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
+  git(repoPath, ['remote', 'add', 'origin', bare]);
+  git(repoPath, ['push', '-q', 'origin', branch]);
+  git(repoPath, ['fetch', '-q', 'origin']);
+  // refs/remotes/origin/HEAD を解決可能にする（best-effort ヘルパは無ければ null を返す）。
+  git(repoPath, ['remote', 'set-head', 'origin', '-a']);
+  return bare;
+}
+
+test('resolveRemoteDefaultBranch: null when there is no remote', () => {
+  initRepo('main');
+  assert.equal(resolveRemoteDefaultBranch(repoPath), null);
+});
+
+test('resolveRemoteDefaultBranch: null when origin/HEAD is not set', () => {
+  initRepo('main');
+  // remote は付けるが set-head しない → origin/HEAD は未設定（setupLaggingRemote 内で dev を作る）。
+  setupLaggingRemote();
+  assert.equal(resolveRemoteDefaultBranch(repoPath), null);
+});
+
+test('resolveRemoteDefaultBranch: returns the default branch name when origin/HEAD is set', () => {
+  initRepo('develop');
+  setupRemoteWithDefaultBranch('develop');
+  assert.equal(resolveRemoteDefaultBranch(repoPath), 'develop');
+});
+
+test('Issue #32: origin/HEAD points at develop and local develop exists → returns develop (priority 3)', () => {
+  // ローカルに dev/stg/main/master は無く develop のみ。origin/HEAD は develop を指す。
+  initRepo('develop');
+  setupRemoteWithDefaultBranch('develop');
+  assert.equal(resolveBaseBranch(repoPath), 'develop');
+});
+
+test('Issue #32: no local candidate, only refs/remotes/origin/develop → returns develop (priority 4)', () => {
+  // ローカルには候補ブランチを一切残さず、origin/develop のリモート追跡 ref だけを用意する。
+  initRepo('develop');
+  setupRemoteWithDefaultBranch('develop');
+  // ローカルの develop を消し、HEAD を切り離してローカル refs/heads を空にする。
+  git(repoPath, ['checkout', '-q', '--detach']);
+  git(repoPath, ['branch', '-D', 'develop']);
+  // ローカルに develop は無いが origin/develop のリモート追跡 ref は残っている。
+  assert.equal(remoteTrackingRef(repoPath, 'origin', 'develop'), 'origin/develop');
+  // origin/HEAD は set-head で解決できる場合もできない場合もあるが、(4) の固定候補走査でも develop は
+  // 候補集合に入っていないため、ここでは origin/HEAD 由来名 develop が (4) 先頭に積まれて解決される。
+  assert.equal(resolveBaseBranch(repoPath), 'develop');
+});
+
+test('Issue #32: remote exists but no candidate branch/ref and no origin/HEAD → throws a clear error', () => {
+  // remote は add するが何も push せず、origin/HEAD も設定しない。ローカルにも候補が無い。
+  // → (2)(3)(4) いずれも空、(5) で Error。
+  initRepo('trunk');
+  const bare = join(root, 'empty-remote.git');
+  mkdirSync(bare);
+  git(bare, ['init', '-q', '--bare']);
+  git(repoPath, ['remote', 'add', 'origin', bare]);
+  // fetch しても push 済みブランチが無いのでリモート追跡 ref は作られず、origin/HEAD も未設定。
+  git(repoPath, ['fetch', '-q', 'origin']);
+  assert.equal(resolveRemoteDefaultBranch(repoPath), null);
+  assert.throws(() => resolveBaseBranch(repoPath), /base/);
+});
 
 test('resolveRemoteName: returns null when there is no remote', () => {
   initRepo('main');

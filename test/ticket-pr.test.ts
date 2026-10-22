@@ -628,6 +628,136 @@ test('does not re-arm (negative): linking an already-done task to a ready ticket
   assert.equal(getTicketReadyAt(ticket1.id), readyAt1, 'linking an already-done task does not change ticket_ready_at (no re-arm)');
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// Issue #32 回帰テスト: base がローカルに無く origin/<base> だけ存在する状況の救済。
+// 共有 repoPath（base=main がローカル実在）とは別に、テストごとに隔離した repo を用意する。
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * base ブランチ <branch> を「ローカルには無く origin/<branch> のリモート追跡 ref としてだけ」存在させた
+ * 隔離 repo を作る（Issue #32 の本丸ケースを再現）。
+ * @returns 作成した repo のパスと、後始末用の root パス。
+ */
+function setupRepoWithRemoteOnlyBase(branch: string): { repo: string; root: string } {
+  const isoRoot = mkdtempSync(join(SCRATCH, 'lockage-issue32-'));
+  const repo = join(isoRoot, 'repo');
+  mkdirSync(repo);
+  git(repo, ['init', '-q', '-b', branch]);
+  git(repo, ['config', 'user.email', 'test@example.com']);
+  git(repo, ['config', 'user.name', 'test']);
+  writeFileSync(join(repo, 'README.md'), '# test\n');
+  git(repo, ['add', '.']);
+  git(repo, ['commit', '-q', '-m', 'init']);
+
+  // bare remote を用意し <branch> を push。origin/HEAD も <branch> に設定する。
+  const bare = join(isoRoot, 'remote.git');
+  mkdirSync(bare);
+  git(bare, ['init', '-q', '--bare', '-b', branch]);
+  git(bare, ['symbolic-ref', 'HEAD', `refs/heads/${branch}`]);
+  git(repo, ['remote', 'add', 'origin', bare]);
+  git(repo, ['push', '-q', 'origin', branch]);
+  git(repo, ['fetch', '-q', 'origin']);
+  git(repo, ['remote', 'set-head', 'origin', '-a']);
+
+  // ローカルの <branch> を消して「origin/<branch> のリモート追跡 ref だけ」の状態にする。
+  // 別ブランチへ detach してから削除する（チェックアウト中は削除できないため）。
+  git(repo, ['checkout', '-q', '--detach']);
+  git(repo, ['branch', '-D', branch]);
+  return { repo, root: isoRoot };
+}
+
+/** 隔離 repo に対し ticket + claimed + worktree-assigned なタスクを 1 件作る。 */
+function seedTaskInRepo(
+  repo: string,
+  ticketId: string,
+  agentId: string,
+): { taskId: string; worktreePath: string; branch: string } {
+  const t = createTask(cdb, { repo, title: `task-${agentId}`, ticketId });
+  const w = assignWorktree(cdb, { agentId, repoPath: repo, taskId: t.id });
+  const claimed = claimTask(cdb, t.id, agentId, t.version);
+  assert.equal(claimed.ok, true);
+  return { taskId: t.id, worktreePath: w.worktree_path, branch: w.branch };
+}
+
+test('Issue #32 regression: base is only origin/develop → integration branch is cut from origin/develop and task_done succeeds (no fatal)', (t) => {
+  const { repo, root: isoRoot } = setupRepoWithRemoteOnlyBase('develop');
+  t.after(() => rmSync(isoRoot, { recursive: true, force: true }));
+
+  const ticket = openTicket(cdb, { title: 'issue32', repos: [repo] });
+  const a = seedTaskInRepo(repo, ticket.id, 'A');
+  commitInWorktree(a.worktreePath, 'a.txt', 'from-A\n');
+  publishDirty(cdb, { agentId: 'A', worktreePath: a.worktreePath, files: ['a.txt'] });
+
+  // 以前は resolveBaseBranch が 'main' を返し、ローカルに main が無いため
+  // `git branch lockage/ticket/<id> main` が fatal で落ちていた（Issue #32）。
+  const r = onTaskDone(cdb, {
+    agentId: 'A',
+    worktreePath: a.worktreePath,
+    branch: a.branch,
+    repo,
+    taskId: a.taskId,
+  });
+
+  assert.ok(r.ok, `task_done should succeed, got: ${JSON.stringify(r)}`);
+  assert.ok(r.ok && r.merged[0]?.path === '1-B', 'aggregated onto the integration branch (1-B)');
+
+  const intBranch = `lockage/ticket/${short(ticket.id)}`;
+  // 統合ブランチがローカルに作成されている（切り元が origin/develop）。
+  try {
+    git(repo, ['show-ref', '--verify', '--quiet', `refs/heads/${intBranch}`]);
+  } catch {
+    assert.fail('the integration branch should exist (cut from origin/develop)');
+  }
+  // 統合ブランチは origin/develop を祖先に持つ（= origin/develop から切られた）。
+  const mergeBase = git(repo, ['merge-base', intBranch, 'origin/develop']);
+  const originDevelop = git(repo, ['rev-parse', 'origin/develop']);
+  assert.equal(mergeBase, originDevelop, 'the integration branch descends from origin/develop');
+  // A の成果が統合ブランチに載っている。
+  let aOnBranch = true;
+  try {
+    git(repo, ['cat-file', '-e', `${intBranch}:a.txt`]);
+  } catch {
+    aOnBranch = false;
+  }
+  assert.ok(aOnBranch, 'a.txt is on the integration branch');
+  assert.equal(getTask(cdb.db, a.taskId)?.status, 'done');
+});
+
+test('Issue #32 regression: base cannot be resolved at all → task_done returns {ok:false, reason:"base_unresolved"} (no raw fatal)', (t) => {
+  // ローカルに dev/stg/main/master が無く、remote も無く、origin/HEAD も無い repo。
+  const isoRoot = mkdtempSync(join(SCRATCH, 'lockage-issue32-nobase-'));
+  t.after(() => rmSync(isoRoot, { recursive: true, force: true }));
+  const repo = join(isoRoot, 'repo');
+  mkdirSync(repo);
+  git(repo, ['init', '-q', '-b', 'trunk']);
+  git(repo, ['config', 'user.email', 'test@example.com']);
+  git(repo, ['config', 'user.name', 'test']);
+  writeFileSync(join(repo, 'README.md'), '# test\n');
+  git(repo, ['add', '.']);
+  git(repo, ['commit', '-q', '-m', 'init']);
+
+  const ticket = openTicket(cdb, { title: 'issue32-nobase', repos: [repo] });
+  // assignWorktree 自体も resolveBaseBranch を使うため base 未解決では worktree を切れない。
+  // ここではタスク/worktree を直接用意せず、onTaskDone が base 解決前の段階で no_active_worktree を
+  // 返さないよう、worktree を明示 base_ref 'trunk'（ローカル実在）で割り当てたうえで base 解決を失敗させる。
+  const tk = createTask(cdb, { repo, title: 'nobase', ticketId: ticket.id });
+  const w = assignWorktree(cdb, { agentId: 'A', repoPath: repo, taskId: tk.id, baseRef: 'trunk' });
+  claimTask(cdb, tk.id, 'A', tk.version);
+  commitInWorktree(w.worktree_path, 'x.txt', 'x\n');
+  publishDirty(cdb, { agentId: 'A', worktreePath: w.worktree_path, files: ['x.txt'] });
+
+  const r = onTaskDone(cdb, {
+    agentId: 'A',
+    worktreePath: w.worktree_path,
+    branch: w.branch,
+    repo,
+    taskId: tk.id,
+  });
+  assert.equal(r.ok, false, 'task_done should fail cleanly');
+  assert.equal(r.ok === false && r.reason, 'base_unresolved', 'reason is base_unresolved');
+  assert.ok(r.ok === false && typeof r.detail === 'string' && r.detail.length > 0, 'detail is present');
+});
+
 // ─── helpers (direct DB reads. read minimally to verify non-exported implementation details) ───
 
 /** Read tickets.integration_branch. */
