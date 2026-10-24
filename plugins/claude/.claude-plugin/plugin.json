@@ -1,6 +1,6 @@
 {
   "name": "lockage",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "lockage collaborative development. Bundles the coordination rules (AGENTS.md) and the lockage-workflow skill, removing the need for per-repository setup.",
   "author": {
     "name": "tacck"
