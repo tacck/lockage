@@ -107,3 +107,50 @@ test('lockage-publish --mode both: an empty board is published:[] reconciled:[] 
   assert.deepEqual(out.published, []);
   assert.deepEqual(out.reconciled, []);
 });
+
+// ── Issue #32: base 未解決時の挙動 ──────────────────────────────────────────────
+
+/** base を解決できない repo（dev/stg/main/master が無く remote も無い）を作る。 */
+function initRepoNoBase(root: string): string {
+  const repo = join(root, 'repo');
+  mkdirSync(repo, { recursive: true });
+  execSync('git init -q -b trunk', { cwd: repo, stdio: 'pipe' });
+  execSync('git config user.email cli@test.local', { cwd: repo, stdio: 'pipe' });
+  execSync('git config user.name cli', { cwd: repo, stdio: 'pipe' });
+  writeFileSync(join(repo, 'README.md'), '# cli\n');
+  execSync('git add README.md', { cwd: repo, stdio: 'pipe' });
+  execSync('git commit -q -m init', { cwd: repo, stdio: 'pipe' });
+  // provider 検出用に origin だけ付ける（push しない＝リモート追跡 ref は作られない）。
+  execSync('git remote add origin git@github.com:acme/repo.git', { cwd: repo, stdio: 'pipe' });
+  return repo;
+}
+
+test('lockage-publish --mode publish: base unresolved exits non-zero with a clear message (no main fallback)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-cli-nobase-'));
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+  const repo = initRepoNoBase(workdir);
+  const dbPath = join(workdir, 'lockage.sqlite');
+
+  const { code, stderr } = await runCli(
+    ['--repo-path', repo, '--mode', 'publish', '--server-entry', SERVER_ENTRY, '--db', dbPath],
+    { LOCKAGE_DB: dbPath },
+  );
+  assert.notEqual(code, 0, 'exits non-zero when base cannot be resolved');
+  assert.match(stderr, /base/, 'stderr explains the base resolution failure');
+});
+
+test('lockage-publish --mode publish: explicit --base works even when base cannot be inferred (exit 0)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-cli-explicitbase-'));
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+  const repo = initRepoNoBase(workdir);
+  const dbPath = join(workdir, 'lockage.sqlite');
+
+  // --base を明示すれば resolveBaseBranch を呼ばず、空ボードなので no-op publish で exit 0。
+  const { code, stdout } = await runCli(
+    ['--repo-path', repo, '--mode', 'publish', '--base', 'trunk', '--server-entry', SERVER_ENTRY, '--db', dbPath],
+    { LOCKAGE_DB: dbPath },
+  );
+  assert.equal(code, 0, `stdout=${stdout} (explicit --base should not fail)`);
+  const out = JSON.parse(stdout.trim());
+  assert.deepEqual(out.published, []);
+});

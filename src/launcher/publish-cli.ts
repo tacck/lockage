@@ -84,12 +84,20 @@ async function main(): Promise<void> {
   const adapter = makePublishAdapter(provider);
 
   // base is only needed for publish. Explicit > resolveBaseBranch(repo).
+  // Issue #32: base を解決できないとき `main` 決め打ちで握り潰すと、存在しない main を base にした PR で
+  // 後続が落ちる。--base 明示時は従来どおり使い、解決不能なら分かりやすいメッセージで非 0 終了する。
   let base = values.base;
-  if (!base) {
+  if (!base && (mode === 'both' || mode === 'publish')) {
     try {
       base = resolveBaseBranch(repoPath);
-    } catch {
-      base = 'main';
+    } catch (e) {
+      process.stderr.write(
+        `lockage-publish: base ブランチを解決できませんでした（repo='${repoPath}'）。` +
+        `--base で base ブランチを明示してください。` +
+        `${e instanceof Error ? ` 詳細: ${e.message}` : ''}\n`,
+      );
+      process.exitCode = 1;
+      return;
     }
   }
 

@@ -40,17 +40,53 @@ function gitRaw(repoPath: string, args: string[]): string {
 }
 
 /**
+ * best-effort ヘルパー: リモートの既定ブランチ名（origin/HEAD が指す先）を返す（Issue #32）。
+ *
+ * `git symbolic-ref --quiet refs/remotes/<remote>/HEAD` を叩き、`refs/remotes/<remote>/<name>` から
+ * `<name>` を取り出して返す。remote 名は既存 `resolveRemoteName(repoPath)` で決める（'origin' 優先、
+ * 'origin' 以外の remote 名にも対応）。remote が無い／origin/HEAD が未設定（`git remote set-head` 等で
+ * 設定されていない）／git 失敗時は null を返す。
+ *
+ * 既存ヘルパー（resolveRemoteName / remoteTrackingRef 等）と同じく best-effort で失敗を握りつぶす方針
+ * に揃える。
+ */
+export function resolveRemoteDefaultBranch(repoPath: string): string | null {
+  const remote = resolveRemoteName(repoPath);
+  if (!remote) return null;
+  let out: string;
+  try {
+    out = git(repoPath, ['symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`]);
+  } catch {
+    return null;
+  }
+  // 期待する形は `refs/remotes/<remote>/<name>`。prefix を剥がしてブランチ名だけを取り出す。
+  const prefix = `refs/remotes/${remote}/`;
+  if (!out.startsWith(prefix)) return null;
+  const name = out.slice(prefix.length);
+  return name.length > 0 ? name : null;
+}
+
+/**
  * Resolve the repo's main branch name (§4.6).
  * Rather than hardcoding `main`, allow `dev`/`stg`/`master` etc. per repo.
  *
- * Phase 1 default policy: explicit value > the first of `dev`/`stg`/`main`/`master` that exists in
- * the repo > `main`.
+ * 解決順（Issue #32 で (3)(4) を追加、戻り値の意味は従来どおり「ブランチ名」のまま）:
+ *   (1) explicit があればそれ（最優先。存在確認はしない＝呼び出し側の明示を尊重）。
+ *   (2) ローカル `refs/heads/` に実在する `dev`/`stg`/`main`/`master` の先頭（従来挙動を完全保持）。
+ *   (3) `resolveRemoteDefaultBranch`（origin/HEAD の既定名）がローカル `refs/heads/` に実在すればそれ。
+ *   (4) 候補名（`dev`/`stg`/`main`/`master` と origin/HEAD 由来の既定名を重複排除した集合）のうち、
+ *       リモート追跡 ref `refs/remotes/<remote>/<name>` に実在する先頭の名前。
+ *   (5) どれも決められなければ `'main'` 決め打ちをやめて Error を投げる（Issue #32 提案4）。
  * (Leaves room to replace with a repo_config table in Phase 2, but for now it is inferred from
- * existing branches.)
+ * existing branches/remote refs.)
  */
 export function resolveBaseBranch(repoPath: string, explicit?: string): string {
   if (explicit) return explicit;
-  for (const cand of ['dev', 'stg', 'main', 'master']) {
+
+  const localCandidates = ['dev', 'stg', 'main', 'master'];
+
+  // (2) ローカル実在の候補（従来挙動）。
+  for (const cand of localCandidates) {
     try {
       git(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${cand}`]);
       return cand;
@@ -58,10 +94,39 @@ export function resolveBaseBranch(repoPath: string, explicit?: string): string {
       /* to the next candidate */
     }
   }
-  // Fallback when none of the candidates exist. The head of the search order is `dev`, but returning
-  // a nonexistent `dev` would make subsequent git operations fail for sure, so keep `main` as the
-  // conventional name most likely to exist.
-  return 'main';
+
+  // (3) origin/HEAD の既定名がローカルに実在すればそれ。
+  const remoteDefault = resolveRemoteDefaultBranch(repoPath);
+  if (remoteDefault) {
+    try {
+      git(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${remoteDefault}`]);
+      return remoteDefault;
+    } catch {
+      /* fall through to the remote-tracking check */
+    }
+  }
+
+  // (4) リモート追跡 ref に実在する候補を探す（ローカルに base が無いリポジトリの救済）。
+  const remote = resolveRemoteName(repoPath);
+  if (remote) {
+    // origin/HEAD 由来名を先頭に足し、固定候補と重複排除して連結する。
+    const remoteCandidates = remoteDefault
+      ? [remoteDefault, ...localCandidates.filter((c) => c !== remoteDefault)]
+      : localCandidates;
+    for (const cand of remoteCandidates) {
+      if (remoteTrackingRef(repoPath, remote, cand)) {
+        return cand;
+      }
+    }
+  }
+
+  // (5) どれも決められない。`'main'` 決め打ちは subsequent な git 操作を確実に失敗させるだけなので、
+  // 原因の分かる Error を投げて呼び出し側に分かりやすい失敗として返させる。
+  throw new Error(
+    `base ブランチを決定できませんでした（repo='${repoPath}'）。` +
+    `ローカルにもリモート追跡 ref にも dev/stg/main/master や origin/HEAD の既定ブランチが見つかりません。` +
+    `base_ref か --base で base ブランチを明示してください。`,
+  );
 }
 
 /**

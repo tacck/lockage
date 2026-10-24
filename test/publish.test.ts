@@ -21,7 +21,7 @@ import {
   renderPrBody,
   closeTicketAfterMerge,
 } from '../src/launcher/publish.ts';
-import { PublishNoDiffError, type PublishAdapter, type PrRef } from '../src/launcher/publish-adapter.ts';
+import { PublishNoDiffError, type PublishAdapter, type PrRef, type PrView } from '../src/launcher/publish-adapter.ts';
 
 /**
  * Verification of the publish core (3) B-2 (design v1 §2 / §4.4).
@@ -94,6 +94,20 @@ function makeFakeAdapter(opts?: {
   pushThrows?: Error;
   prStateValue?: 'OPEN' | 'MERGED' | 'CLOSED';
   deleteRemoteThrows?: Error;
+  /**
+   * Issue #31 主防御: reconcile が --repo-path の owner/repo を照合するためのフェイク identity。
+   * 既存の reconcile テストが MERGED 処理に到達するよう、openPr が返す URL（acme/repo）に合わせて
+   * 既定を 'acme/repo' にしてある（合わせないと other_repo で skip され既存アサーションが落ちる）。
+   * 別リポジトリ扱いや identity 不明をテストするときは明示的に上書き（null 指定で「取得できない」を表現）。
+   */
+  repoIdentity?: string | null;
+  /**
+   * Issue #31 二重防御: prView が返す PR の head ブランチ名。
+   * reconcile の MERGED 分岐はこれがチケットの統合ブランチと一致するかを照合する。
+   * 既定では pushBranch で記録した最後の head（統合ブランチ名）を返し、既存 reconcile テストが
+   * そのまま MERGED 処理に到達できるようにする。head 不一致/不明テストでは明示的に上書きする。
+   */
+  headRefName?: string | null;
 }): PublishAdapter & {
   pushed: string[];
   openedHeads: string[];
@@ -105,6 +119,8 @@ function makeFakeAdapter(opts?: {
   const bodyFiles: string[] = [];
   const deletedRemote: string[] = [];
   let n = opts?.prNumber ?? 100;
+  const hasRepoIdentity = opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'repoIdentity');
+  const hasHeadRefName = opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'headRefName');
   return {
     id: 'github',
     pushed,
@@ -128,9 +144,21 @@ function makeFakeAdapter(opts?: {
     async prState() {
       return opts?.prStateValue ?? 'OPEN';
     },
+    async prView(): Promise<PrView> {
+      const state = opts?.prStateValue ?? 'OPEN';
+      // headRefName の既定: 直近 push した統合ブランチ名（= read_ticket の integration_branch と一致）。
+      // push 記録が無い（reconcile 用に別 adapter を作った）ケースでも、pushed 末尾があればそれを使う。
+      const defaultHead = pushed.length > 0 ? pushed[pushed.length - 1] : null;
+      const head = hasHeadRefName ? (opts?.headRefName ?? null) : defaultHead;
+      return { state, headRefName: head };
+    },
     async deleteRemoteBranch(_repo, branch) {
       if (opts?.deleteRemoteThrows) throw opts.deleteRemoteThrows;
       deletedRemote.push(branch);
+    },
+    async repoIdentity(): Promise<string | null> {
+      // 既定は openPr の URL に合わせて 'acme/repo'。null 指定で「identity 不明」を表現できる。
+      return hasRepoIdentity ? (opts?.repoIdentity ?? null) : 'acme/repo';
     },
   };
 }
@@ -434,7 +462,7 @@ test('reconcileMergedPrs: detect PR MERGED and do remote delete + integration_br
   const versionBefore = before.ticket.version;
 
   // the PR became MERGED
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const deletedLocal: string[] = [];
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
@@ -494,6 +522,127 @@ test('reconcileMergedPrs: if the PR is still OPEN, still_open and clean up nothi
   assert.equal(m.messages.length, 0, 'no pr_merged appears');
 });
 
+// ── Issue #31 主防御: 台帳を共有する別リポジトリの同番号 PR を other_repo として skip する ──────────
+// pr_opened 本文 URL の owner/repo（acme/repo）と --repo-path の identity が一致しないと、PR が MERGED でも
+// 後処理を一切行わず skipped(reason:'other_repo') にして continue することを検証する（番号取り違えの根本防御）。
+test('reconcileMergedPrs: a same-number PR in another repo is skipped as other_repo (Issue #31)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-rec-other-repo-'));
+  const dbPath = join(workdir, 'lockage.sqlite');
+  const repoPath = initRepo(workdir);
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+
+  const cdb = openDb({ path: dbPath, hostId: 'host-test' });
+  const { branch } = seedReadyTicket(cdb, repoPath);
+  cdb.close();
+
+  const client = new LockageClient({ serverEntry: SERVER_ENTRY, dbPath, toolsets: ['publisher'] });
+  await client.connect();
+  t.after(() => client.close());
+
+  const { ticketId } = await publishOne(client, repoPath);
+
+  // --repo-path の identity が本文 URL の owner/repo（acme/repo）と一致しない別リポジトリを模す。
+  // たとえ PR が MERGED で head が一致していても、リポジトリ照合で other_repo として先に skip される。
+  const adapter = makeFakeAdapter({
+    prStateValue: 'MERGED',
+    headRefName: branch,
+    repoIdentity: 'other-owner/other-repo',
+  });
+  const outcomes = await reconcileMergedPrs(client, adapter, {
+    repoPath,
+    agentId: 'publisher',
+    deleteLocalBranch: () => true,
+  });
+
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].result, 'skipped');
+  assert.equal((outcomes[0] as any).reason, 'other_repo', '別リポジトリの同番号 PR なので other_repo で skip');
+  assert.equal(adapter.deletedRemote.length, 0, 'リモートブランチ削除は走らない');
+  // 後処理が一切走らないので integration_branch は残り、pr_merged も付かない。
+  const after = await client.callTool('read_ticket', { ticket_id: ticketId });
+  assert.equal(after.ticket.integration_branch, branch, 'integration_branch は NULL リセットされない');
+  assert.notEqual(after.ticket.status, 'closed', 'チケットは閉じられない');
+  const m = await client.callTool('read_board', { kind: 'pr_merged' });
+  assert.equal(m.messages.filter((x: any) => x.ref_ticket_id === ticketId).length, 0, 'pr_merged は付かない');
+});
+
+// ── Issue #31 主防御（安全側の既定）: --repo-path の identity が取得できないときも other_repo で skip ──────────
+test('reconcileMergedPrs: when the repo identity cannot be resolved, skip as other_repo (Issue #31 safe default)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-rec-ident-unknown-'));
+  const dbPath = join(workdir, 'lockage.sqlite');
+  const repoPath = initRepo(workdir);
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+
+  const cdb = openDb({ path: dbPath, hostId: 'host-test' });
+  const { branch } = seedReadyTicket(cdb, repoPath);
+  cdb.close();
+
+  const client = new LockageClient({ serverEntry: SERVER_ENTRY, dbPath, toolsets: ['publisher'] });
+  await client.connect();
+  t.after(() => client.close());
+
+  const { ticketId } = await publishOne(client, repoPath);
+
+  // repoIdentity:null = gh repo view が認証/ネットワーク失敗で identity を取れない状況。
+  // 照合不能なので取り違えを防げない＝安全側で other_repo として skip する。
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch, repoIdentity: null });
+  const outcomes = await reconcileMergedPrs(client, adapter, {
+    repoPath,
+    agentId: 'publisher',
+    deleteLocalBranch: () => true,
+  });
+
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].result, 'skipped');
+  assert.equal((outcomes[0] as any).reason, 'other_repo', 'identity 不明時は安全側で other_repo で skip');
+  assert.equal(adapter.deletedRemote.length, 0, 'リモートブランチ削除は走らない');
+  const after = await client.callTool('read_ticket', { ticket_id: ticketId });
+  assert.equal(after.ticket.integration_branch, branch, 'integration_branch は NULL リセットされない');
+  const m = await client.callTool('read_board', { kind: 'pr_merged' });
+  assert.equal(m.messages.filter((x: any) => x.ref_ticket_id === ticketId).length, 0, 'pr_merged は付かない');
+});
+
+// ── Issue #31 二重防御: head 不一致なら MERGED でも head_mismatch として skip する ──────────
+// リポジトリ照合（acme/repo）は通るが、PR の headRefName がチケットの統合ブランチと一致しない場合、
+// 後処理を一切行わず skipped(reason:'head_mismatch') にすることを検証する（取り違えの二重防御）。
+test('reconcileMergedPrs: a MERGED PR whose head does not match the integration branch is skipped as head_mismatch (Issue #31)', async (t) => {
+  const workdir = mkdtempSync(join(SCRATCH, 'lockage-rec-head-mismatch-'));
+  const dbPath = join(workdir, 'lockage.sqlite');
+  const repoPath = initRepo(workdir);
+  t.after(() => rmSync(workdir, { recursive: true, force: true }));
+
+  const cdb = openDb({ path: dbPath, hostId: 'host-test' });
+  const { branch } = seedReadyTicket(cdb, repoPath);
+  cdb.close();
+
+  const client = new LockageClient({ serverEntry: SERVER_ENTRY, dbPath, toolsets: ['publisher'] });
+  await client.connect();
+  t.after(() => client.close());
+
+  const { ticketId } = await publishOne(client, repoPath);
+
+  // リポジトリは一致（既定 acme/repo）するが、head が統合ブランチと違う別ブランチを返す。
+  const adapter = makeFakeAdapter({
+    prStateValue: 'MERGED',
+    headRefName: 'some/other-branch',
+  });
+  const outcomes = await reconcileMergedPrs(client, adapter, {
+    repoPath,
+    agentId: 'publisher',
+    deleteLocalBranch: () => true,
+  });
+
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].result, 'skipped');
+  assert.equal((outcomes[0] as any).reason, 'head_mismatch', 'head がチケットの統合ブランチと一致しないので skip');
+  assert.equal(adapter.deletedRemote.length, 0, 'リモートブランチ削除は走らない');
+  const after = await client.callTool('read_ticket', { ticket_id: ticketId });
+  assert.equal(after.ticket.integration_branch, branch, 'integration_branch は NULL リセットされない');
+  assert.notEqual(after.ticket.status, 'closed', 'チケットは閉じられない');
+  const m = await client.callTool('read_board', { kind: 'pr_merged' });
+  assert.equal(m.messages.filter((x: any) => x.ref_ticket_id === ticketId).length, 0, 'pr_merged は付かない');
+});
+
 test('reconcileMergedPrs: idempotent — the second time does not touch tickets that have pr_merged', async (t) => {
   const workdir = mkdtempSync(join(SCRATCH, 'lockage-rec-idem-'));
   const dbPath = join(workdir, 'lockage.sqlite');
@@ -508,9 +657,9 @@ test('reconcileMergedPrs: idempotent — the second time does not touch tickets 
   await client.connect();
   t.after(() => client.close());
 
-  await publishOne(client, repoPath);
+  const { branch } = await publishOne(client, repoPath);
 
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const first = await reconcileMergedPrs(client, adapter, {
     repoPath,
     agentId: 'publisher',
@@ -545,13 +694,13 @@ test('reconcileMergedPrs: with PR MERGED and all tasks done, release the done-ta
   await client.connect();
   t.after(() => client.close());
 
-  const { ticketId } = await publishOne(client, repoPath);
+  const { ticketId, branch } = await publishOne(client, repoPath);
 
   // premise: the 1-B path (onTaskDone) does not release worktrees, so even all-done the worktrees stay active.
   const before = await client.callTool('list_worktrees', {});
   assert.equal(before.length, 2, 'before reconcile 2 worktrees are active (1-B does not release)');
 
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
     agentId: 'publisher',
@@ -592,10 +741,10 @@ test('reconcileMergedPrs: with PR MERGED and all tasks done, release the done-ta
   await client.connect();
   t.after(() => client.close());
 
-  const { ticketId: pubId } = await publishOne(client, repoPath);
+  const { ticketId: pubId, branch } = await publishOne(client, repoPath);
   assert.equal(pubId, ticketId);
 
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
     agentId: 'publisher',
@@ -627,13 +776,13 @@ test('reconcileMergedPrs: for a ticket with a not-done task remaining, do not re
   await client.connect();
   t.after(() => client.close());
 
-  const { ticketId: pubId } = await publishOne(client, repoPath);
+  const { ticketId: pubId, branch } = await publishOne(client, repoPath);
   assert.equal(pubId, ticketId);
 
   const beforeCount = (await client.callTool('list_worktrees', {})).length;
   assert.equal(beforeCount, 2, 'before reconcile 2 worktrees are active');
 
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
     agentId: 'publisher',
@@ -730,7 +879,7 @@ test('reconcileMergedPrs: a later-added task that is abandoned does not block re
   await client.connect();
   t.after(() => client.close());
 
-  const { ticketId: pubId } = await publishOne(client, repoPath);
+  const { ticketId: pubId, branch } = await publishOne(client, repoPath);
   assert.equal(pubId, ticketId);
 
   const beforeCount = (await client.callTool('list_worktrees', {})).length;
@@ -738,7 +887,7 @@ test('reconcileMergedPrs: a later-added task that is abandoned does not block re
   // releaseTask は claim を解放するが worktree 割り当ては解放しないため、abandoned の worktree も残る。
   assert.equal(beforeCount, 3, 'before reconcile 2 done-task + 1 abandoned-task worktrees are active');
 
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
     agentId: 'publisher',
@@ -775,7 +924,7 @@ test('reconcileMergedPrs: with a dirty worktree mixed in, release only the clean
   await client.connect();
   t.after(() => client.close());
 
-  await publishOne(client, repoPath);
+  const { branch } = await publishOne(client, repoPath);
 
   // premise: the 1-B path (onTaskDone) does not release worktrees, so both worktrees stay clean and active.
   const before = (await client.callTool('list_worktrees', {})) as Array<{
@@ -795,7 +944,7 @@ test('reconcileMergedPrs: with a dirty worktree mixed in, release only the clean
   assert.ok(cleanRow, 'the stays-clean (-claude-01) worktree assignment exists');
   writeFileSync(join(dirtyRow!.worktree_path, 'README.md'), '# dirty — an uncommitted tracked diff\n');
 
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
     agentId: 'publisher',
@@ -850,7 +999,7 @@ test('reconcileMergedPrs: even with PR MERGED, if a not-done task remains under 
   assert.equal(pubId, ticketId);
 
   // A's PR became MERGED, but the not-done B is mid-way being stacked onto the integration branch.
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const deletedLocal: string[] = [];
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
@@ -995,12 +1144,13 @@ test('reconcileMergedPrs: even if remote delete fails (already deleted) the post
   await client.connect();
   t.after(() => client.close());
 
-  const { ticketId } = await publishOne(client, repoPath);
+  const { ticketId, branch } = await publishOne(client, repoPath);
 
   // the case where GitHub's auto-delete already removed it and deleteRemoteBranch throws
   const adapter = makeFakeAdapter({
     prStateValue: 'MERGED',
     deleteRemoteThrows: new Error('remote ref does not exist'),
+    headRefName: branch,
   });
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
@@ -1118,7 +1268,7 @@ test('reconcileMergedPrs: even on a 100+ row board, detect the MERGED of a pr_op
   // the target ticket's PR became MERGED. with read-all it picks up the out-of-window pr_opened and detects the merge.
   // in the old impl (oldest-100 window) it cannot read the out-of-window pr_opened and misses the target ticket from the outcome = fails on revert.
   // seedReadyTicket's 2 tasks are done, so it does not hit the not-done guard (skipped_unmerged_tasks).
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const deletedLocal: string[] = [];
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
@@ -1203,7 +1353,7 @@ test('reconcileMergedPrs: an already-closed ticket is not re-updated (version no
   await client.connect();
   t.after(() => client.close());
 
-  await publishOne(client, repoPath);
+  const { branch } = await publishOne(client, repoPath);
 
   // close the ticket by hand first (= an already-closed situation). record the version.
   const before = await client.callTool('read_ticket', { ticket_id: ticketId });
@@ -1215,7 +1365,7 @@ test('reconcileMergedPrs: an already-closed ticket is not re-updated (version no
   assert.equal(upd.ok, true);
   const closedVersion = upd.ticket.version;
 
-  const adapter = makeFakeAdapter({ prStateValue: 'MERGED' });
+  const adapter = makeFakeAdapter({ prStateValue: 'MERGED', headRefName: branch });
   const outcomes = await reconcileMergedPrs(client, adapter, {
     repoPath,
     agentId: 'publisher',

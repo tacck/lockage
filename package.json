@@ -1,6 +1,6 @@
 {
   "name": "lockage",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "Lockage — an MCP server for multiple coding LLMs to collaborate around a local git repository (single host)",
   "license": "MIT",
   "repository": {

@@ -416,7 +416,11 @@ export type ReconcileOutcome =
   | { ticketId: string; prNumber: number; result: 'skipped_unmerged_tasks' }
   | { ticketId: string; prNumber: number; result: 'failed'; error: string }
   // 'locked': another process holds the per-ticket advisory lock, so this run skipped the post-processing.
-  | { ticketId: string; result: 'skipped'; reason: 'no_pr_number' | 'locked' };
+  // Issue #31:
+  //   'other_repo'    : pr_opened 本文の owner/repo が --repo-path の identity と一致しない（別リポジトリの同番号 PR）、
+  //                     または identity が照合不能（本文 URL から取れない / --repo-path の identity が取れない）＝安全側で skip。
+  //   'head_mismatch' : PR は MERGED だが headRefName がチケットの統合ブランチと一致しない、または head 不明＝安全側で skip（二重防御）。
+  | { ticketId: string; prNumber?: number; result: 'skipped'; reason: 'no_pr_number' | 'locked' | 'other_repo' | 'head_mismatch' };
 
 /**
  * Fix option A: collect the latest seq per ticket from a group of board messages.
@@ -436,6 +440,21 @@ function latestSeqByTicket(messages: BoardMsg[]): Map<string, number> {
 function parsePrNumber(body: string): number | null {
   const m = body.match(/^PR #(\d+)\b/);
   return m ? Number(m[1]) : null;
+}
+
+/**
+ * Issue #31 主防御: pr_opened 本文の PR URL から owner/repo を抽出する。
+ * 本文は `PR #<n> https://github.com/<owner>/<repo>/pull/<n>` の形（publishReadyTickets が投稿）。
+ * この owner/repo を --repo-path の identity（gh repo view --json nameWithOwner）と照合し、
+ * 台帳を共有する別リポジトリの同番号 PR を reconcile 対象から除外する。
+ * 抽出できなければ null（照合不能＝呼び出し側で安全側に倒す）。
+ */
+function parsePrRepoIdentity(body: string): string | null {
+  // https://github.com/<owner>/<repo>/pull/<n> から <owner>/<repo> を取る。
+  // host 配下の最初の 2 セグメントを owner/repo とみなす（.git 等は URL には付かない）。
+  const m = body.match(/https?:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/\d+/i);
+  if (!m) return null;
+  return `${m[1]}/${m[2]}`;
 }
 
 /**
@@ -481,6 +500,19 @@ export async function reconcileMergedPrs(
     merged.messages.map((m) => m.ref_ticket_id).filter((x): x is string => !!x),
   );
 
+  // Issue #31 主防御: --repo-path が指す owner/repo（nameWithOwner）をループ外で一度だけ取得してキャッシュする。
+  // best-effort（認証・ネットワーク失敗時は null）。null のときは「照合不能＝取り違えを防げない」ので、
+  // 各チケットを other_repo として skip する（楽観的に処理を続けると別リポジトリの PR を誤処理する穴が残るため）。
+  let repoIdentity: string | null = null;
+  try {
+    repoIdentity = await adapter.repoIdentity(args.repoPath);
+  } catch (e) {
+    console.error(
+      `[reconcile] failed to resolve the repo identity for ${args.repoPath} (treat as unknown): ${errText(e)}`,
+    );
+    repoIdentity = null;
+  }
+
   const outcomes: ReconcileOutcome[] = [];
   const handled = new Set<string>();
 
@@ -510,10 +542,40 @@ export async function reconcileMergedPrs(
       continue;
     }
 
+    // Issue #31 主防御（リポジトリ照合）: pr_opened 本文 URL の owner/repo と --repo-path の identity を比較する。
+    // 不一致なら「台帳を共有する別リポジトリの同番号 PR」なので、prState を問い合わせる前に other_repo で skip する
+    // （誤って別リポジトリの PR を MERGED 判定して pr_merged 書き込み・closed 化・worktree/claim 解放まで走るのを防ぐ）。
+    // 照合不能（本文 URL から owner/repo が取れない、または --repo-path の identity が取れない）ときも、
+    // 取り違えを防げないので安全側で other_repo として skip する（従来どおり処理を続けると穴が残るため）。
+    const bodyIdentity = parsePrRepoIdentity(msg.body);
+    if (repoIdentity == null || bodyIdentity == null || bodyIdentity !== repoIdentity) {
+      outcomes.push({ ticketId, prNumber, result: 'skipped', reason: 'other_repo' });
+      await client.callTool('release_publish_lock', { ticket_id: ticketId, holder: lock.holder });
+      continue;
+    }
+
     try {
-      const state = await adapter.prState(args.repoPath, prNumber);
+      // Issue #31 二重防御（head 照合）: state と head ブランチ名を同時に取得する。
+      const prView = await adapter.prView(args.repoPath, prNumber);
+      const state = prView.state;
       if (state !== 'MERGED') {
         outcomes.push({ ticketId, prNumber, result: 'still_open' });
+        continue;
+      }
+
+      // The integration branch name and the current status/version are fetched from the ticket (they are not in the pr_opened body).
+      // Issue #31: head 照合のため MERGED 判定直後（タスクガードの前）に read_ticket を前倒しで取得する。
+      const res = (await client.callTool('read_ticket', { ticket_id: ticketId })) as {
+        ticket: TicketView | null;
+      };
+      const branch = res.ticket?.integration_branch ?? null;
+
+      // Issue #31 二重防御: PR の headRefName がチケットの統合ブランチ（lockage/ticket/<short-id>）と一致するかを確認する。
+      // 一致しない、または headRefName が取得できず不明なときは、後処理（pr_merged 書き込み・closed 化・ブランチ削除・
+      // worktree/claim 解放）を一切行わず head_mismatch で skip する（安全側に倒す）。
+      // 現状 branch は統合ブランチ NULL リセット後なら null になりうるが、その場合も照合不能として skip する。
+      if (branch == null || prView.headRefName == null || prView.headRefName !== branch) {
+        outcomes.push({ ticketId, prNumber, result: 'skipped', reason: 'head_mismatch' });
         continue;
       }
 
@@ -536,12 +598,8 @@ export async function reconcileMergedPrs(
         continue;
       }
 
-      // The integration branch name and the current status/version are fetched from the ticket (they are not in the pr_opened body).
-      const res = (await client.callTool('read_ticket', { ticket_id: ticketId })) as {
-        ticket: TicketView | null;
-      };
-      const branch = res.ticket?.integration_branch ?? null;
-
+      // Issue #31: branch（統合ブランチ名）は head 照合のため既に上で read_ticket から取得済み。
+      // ここに到達した時点で branch は non-null（head_mismatch ガードで null は弾いている）。
       let branchDeleted = false;
       if (branch) {
         // ① remote deletion (may fail if GitHub's auto-delete already removed it = swallow and log)
