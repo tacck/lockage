@@ -51,7 +51,7 @@ lockage は、原子 claim・依存 DAG・チケット管理・worktree 物理�
 
 ### Kiro Powers
 
-`plugins/kiro` を Power として登録し、同梱の `mcp.json` を Kiro の MCP 設定に反映し（プレースホルダの置換は不要）、`npx -y lockage setup kiro` で導入先の `.kiro/hooks/` に hook を置きます。`plugins/README_ja.md` の [Kiro（Power）](plugins/README_ja.md#kiropower) 節を参照してください。
+`plugins/kiro` を Power として登録し、同梱の `mcp.json` を Kiro の MCP 設定に反映し（プレースホルダの置換は不要）、`npx -y lockage setup kiro`（オプション: `--repo <path>` / `--force` / `--agents-md <path>`）で導入先の `.kiro/hooks/` に hook を置きます。session hook に埋める `AGENTS.md` のパスは、明示指定の `--agents-md`、導入先の `.kiro/steering/AGENTS.md`、`~/.kiro/powers/installed/` から自動探索した lockage Power の `steering/AGENTS.md` の順で決まり、どれも見つからなければ `setup kiro` が `warning:` 行を出します。`plugins/README_ja.md` の [Kiro（Power）](plugins/README_ja.md#kiropower) 節を参照してください。
 
 ### Claude Code Plugin
 
