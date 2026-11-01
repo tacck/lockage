@@ -664,7 +664,8 @@ test('an unknown hook subcommand is usage + non-zero', () => {
 test('setup kiro: generates lockage-guard.json / lockage-session.json in npx form', () => {
   const { base, repo, cleanup } = makeRepo();
   try {
-    const r = runCli(['setup', 'kiro', '--repo', repo]);
+    // 実環境の ~/.kiro の Power を拾わないよう HOME を隔離する
+    const r = runCli(['setup', 'kiro', '--repo', repo], { env: { HOME: base } });
     assert.equal(r.status, 0);
     const hooksDir = join(repo, '.kiro', 'hooks');
     const guard = JSON.parse(readFileSync(join(hooksDir, 'lockage-guard.json'), 'utf8'));
@@ -698,6 +699,148 @@ test('setup kiro: generates lockage-guard.json / lockage-session.json in npx for
     const bothCommands = JSON.stringify(guard) + JSON.stringify(session);
     assert.ok(!bothCommands.includes('<ABSOLUTE'));
     assert.ok(session.hooks[0].action.command.includes(join(repo, '.kiro', 'steering', 'AGENTS.md')));
+  } finally {
+    cleanup();
+  }
+});
+
+function writeFakePower(home: string, folder: string, name: string): string {
+  const dir = join(home, '.kiro', 'powers', 'installed', folder);
+  mkdirSync(join(dir, 'steering'), { recursive: true });
+  writeFileSync(join(dir, 'POWER.md'), `---\nname: "${name}"\ndisplayName: x\n---\n# x\n`);
+  writeFileSync(join(dir, 'steering', 'AGENTS.md'), '# rules\n');
+  return join(dir, 'steering', 'AGENTS.md');
+}
+
+function sessionCommand(repo: string): string {
+  const s = JSON.parse(readFileSync(join(repo, '.kiro', 'hooks', 'lockage-session.json'), 'utf8'));
+  return s.hooks[0].action.command as string;
+}
+
+test('setup kiro: 導入先に AGENTS.md が無ければ Power の name: "lockage" のフォルダから探す(フォルダ名は不問)', () => {
+  const { base, repo, cleanup } = makeRepo();
+  try {
+    writeFakePower(base, 'other-power', 'other');
+    const expected = writeFakePower(base, 'lockage-main-xyz', 'lockage');
+    const r = runCli(['setup', 'kiro', '--repo', repo], { env: { HOME: base } });
+    assert.equal(r.status, 0);
+    assert.ok(!r.stdout.includes('warning'));
+    assert.ok(sessionCommand(repo).includes(`--agents-md "${expected}"`), sessionCommand(repo));
+  } finally {
+    cleanup();
+  }
+});
+
+test('setup kiro: name: "lockage" の Power が複数あれば名前順で最初の、steering/AGENTS.md があるものを選ぶ', () => {
+  const { base, repo, cleanup } = makeRepo();
+  try {
+    // a-power は AGENTS.md を欠くのでスキップされ、b-power が選ばれる(c-power も lockage だが後順)
+    const aDir = join(base, '.kiro', 'powers', 'installed', 'a-power');
+    mkdirSync(aDir, { recursive: true });
+    writeFileSync(join(aDir, 'POWER.md'), '---\nname: "lockage"\n---\n');
+    const b = writeFakePower(base, 'b-power', 'lockage');
+    writeFakePower(base, 'c-power', 'lockage');
+    const r = runCli(['setup', 'kiro', '--repo', repo], { env: { HOME: base } });
+    assert.equal(r.status, 0);
+    assert.ok(sessionCommand(repo).includes(`--agents-md "${b}"`), sessionCommand(repo));
+  } finally {
+    cleanup();
+  }
+});
+test('setup kiro: front matter の name は行末コメントと引用符付きを許容する', () => {
+  const cases = ['name: lockage # comment', "name: 'lockage'", 'name: "lockage" # comment', 'name:lockage'];
+  for (const line of cases) {
+    const { base, repo, cleanup } = makeRepo();
+    try {
+      const dir = join(base, '.kiro', 'powers', 'installed', 'p');
+      mkdirSync(join(dir, 'steering'), { recursive: true });
+      writeFileSync(join(dir, 'POWER.md'), `---\n${line}\ndisplayName: x\n---\n`);
+      writeFileSync(join(dir, 'steering', 'AGENTS.md'), '# r\n');
+      runCli(['setup', 'kiro', '--repo', repo], { env: { HOME: base } });
+      assert.ok(sessionCommand(repo).includes(`--agents-md "${join(dir, 'steering', 'AGENTS.md')}"`), line);
+    } finally {
+      cleanup();
+    }
+  }
+});
+test('setup kiro: name が lockage でない行(lockage-other や コメントのみ)は拾わない', () => {
+  const { base, repo, cleanup } = makeRepo();
+  try {
+    const dir = join(base, '.kiro', 'powers', 'installed', 'p');
+    mkdirSync(join(dir, 'steering'), { recursive: true });
+    writeFileSync(join(dir, 'POWER.md'), '---\nname: lockage-other # lockage\n---\n');
+    writeFileSync(join(dir, 'steering', 'AGENTS.md'), '# r\n');
+    const r = runCli(['setup', 'kiro', '--repo', repo], { env: { HOME: base } });
+    assert.ok(r.stdout.includes('warning: AGENTS.md が見つかりません'), r.stdout);
+  } finally {
+    cleanup();
+  }
+});
+test('setup kiro: 導入先に AGENTS.md があればそれを優先する', () => {
+  const { base, repo, cleanup } = makeRepo();
+  try {
+    writeFakePower(base, 'lockage', 'lockage');
+    mkdirSync(join(repo, '.kiro', 'steering'), { recursive: true });
+    writeFileSync(join(repo, '.kiro', 'steering', 'AGENTS.md'), '# local\n');
+    runCli(['setup', 'kiro', '--repo', repo], { env: { HOME: base } });
+    assert.ok(sessionCommand(repo).includes(join(repo, '.kiro', 'steering', 'AGENTS.md')));
+  } finally {
+    cleanup();
+  }
+});
+
+test('setup kiro: --agents-md の明示指定が最優先で埋まる', () => {
+  const { base, repo, cleanup } = makeRepo();
+  try {
+    writeFakePower(base, 'lockage', 'lockage');
+    const custom = join(base, 'custom-AGENTS.md');
+    writeFileSync(custom, '# c\n');
+    const r = runCli(['setup', 'kiro', '--repo', repo, '--agents-md', custom], { env: { HOME: base } });
+    assert.equal(r.status, 0);
+    assert.ok(!r.stdout.includes('warning'));
+    assert.ok(sessionCommand(repo).includes(`--agents-md "${custom}"`));
+  } finally {
+    cleanup();
+  }
+});
+
+test('setup kiro: どこにも見つからなければ警告を出す(終了コードは 0)', () => {
+  const { base, repo, cleanup } = makeRepo();
+  try {
+    const r = runCli(['setup', 'kiro', '--repo', repo], { env: { HOME: base } });
+    assert.equal(r.status, 0);
+    assert.ok(r.stdout.includes('warning: AGENTS.md が見つかりません'), r.stdout);
+  } finally {
+    cleanup();
+  }
+});
+
+test('setup kiro: --agents-md が存在しないパスなら警告を出す', () => {
+  const { base, repo, cleanup } = makeRepo();
+  try {
+    const r = runCli(['setup', 'kiro', '--repo', repo, '--agents-md', join(base, 'nope.md')], { env: { HOME: base } });
+    assert.ok(r.stdout.includes('warning: --agents-md で指定したファイルが存在しません'), r.stdout);
+  } finally {
+    cleanup();
+  }
+});
+
+test('kiro session: --agents-md が存在しなければ警告を出し、存在すれば出さない', () => {
+  const { base, repo, cleanup } = makeRepo();
+  try {
+    addLockageWorktree(base, repo);
+    const missing = runCli(['hook', 'session', '--client', 'kiro', '--agents-md', join(base, 'nope.md')], {
+      input: JSON.stringify({ cwd: repo }),
+      env: guardEnv(base),
+    });
+    assert.ok(missing.stdout.includes('Warning: the --agents-md file does not exist'), missing.stdout);
+    const exists = join(base, 'real.md');
+    writeFileSync(exists, '# r\n');
+    const ok = runCli(['hook', 'session', '--client', 'kiro', '--agents-md', exists], {
+      input: JSON.stringify({ cwd: repo }),
+      env: guardEnv(base),
+    });
+    assert.ok(!ok.stdout.includes('Warning: the --agents-md'));
   } finally {
     cleanup();
   }

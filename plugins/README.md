@@ -268,7 +268,7 @@ Since both the MCP server and the hook launch the npm-published artifact with `n
 3. **Place the hooks into `.kiro/hooks/`.** The main path is running `npx -y lockage setup kiro` in the target repository.
    This generates `.kiro/hooks/lockage-guard.json` (main-tree edit guard) and `lockage-session.json` (`SessionStart` context injection).
    Each `action.command` is of the form `npx -y lockage hook <guard|session> --client kiro ...`, so **no manual absolute-path replacement is needed**
-   (the session hook's `--agents-md` is filled with the absolute path of the target's `.kiro/steering/AGENTS.md`). If a same-named file already exists, it is
+   (the session hook's `--agents-md` is filled in this order: the explicit `--agents-md <path>` option, the target's `.kiro/steering/AGENTS.md` if it exists, otherwise the `steering/AGENTS.md` of the installed Power found under `~/.kiro/powers/installed/*/` by `name: "lockage"` in `POWER.md`'s front matter; the folder name is never assumed because it follows the source folder name. If several Powers have `name: "lockage"`, the first by folder name (ascending) that actually has `steering/AGENTS.md` is used, and Powers lacking it are skipped. For a Power install the target has no `.kiro/steering/AGENTS.md`, so the Power's installed path is used. If none is found, `setup kiro` prints a `warning:` line, and the session hook also reports a missing `--agents-md` file instead of staying silent). If a same-named file already exists, it is
    `unchanged` if the contents are the same, and not overwritten until you add `--force`. Even if you run it inside a worktree, the hooks are placed in the main repository's
    `.kiro/hooks/`. With this path there is no need to clone for the hooks (`npx` fetches and launches the npm-published artifact).
    You can work without hooks, but main-tree edits are not stopped (follow the rules in `main-tree-guard.md` yourself).
@@ -276,14 +276,14 @@ Since both the MCP server and the hook launch the npm-published artifact with `n
    **Alternative when not using setup**: when `npx -y lockage` is unavailable (offline, internal-registry constraints, etc.)/you want to adjust the generated
    files by hand, copy the bundled templates (`lockage-guard.json`, `lockage-session.json`) in the clone's `plugins/kiro/hooks/` into the
    target's `.kiro/hooks/`. Replace `lockage-session.json`'s `--agents-md "<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>"` with
-   the absolute path of the target's `.kiro/steering/AGENTS.md` (`lockage-guard.json` does not use `--agents-md`, so no replacement is needed).
+   the absolute path of `AGENTS.md` (the target's `.kiro/steering/AGENTS.md`, or the Power's `~/.kiro/powers/installed/<source folder name>/steering/AGENTS.md`) (`lockage-guard.json` does not use `--agents-md`, so no replacement is needed).
 4. **Loading the steering.** The Steering section of `POWER.md` guides when to read `AGENTS.md`, `lockage-workflow.md`, `coordination` /
    `main-tree-guard` / `publish-pr`. Inclusion mode "Always" is recommended for the steering.
 
 - **Verification** (for the 0.5-series configuration, not confirmed on a real machine with lockage):
   - Start a new session in a repository that lockage is operating in and ask "answer verbatim, without using tools, the heading the lockage Power's hook showed and the path of the canonical coordination rules,"
     and it should answer the heading "lockage coordinated development (lockage Kiro Power)" and
-    the target's `.kiro/steering/AGENTS.md` (the absolute path `setup kiro` filled into `--agents-md`). If it cannot answer, confirm whether
+    the absolute path of `AGENTS.md` that `setup kiro` filled into `--agents-md` (for a Power install, `~/.kiro/powers/installed/<source folder name>/steering/AGENTS.md`). If it cannot answer, confirm whether
     `.kiro/hooks/lockage-session.json` is placed and `command` is of the form `npx -y lockage hook session --client kiro ...`
     (a hook failure appears on stderr as a line beginning with `[lockage-plugin]`).
   - When you have it edit a file in the main tree of the same repository, it should be rejected and ask back whether to proceed in a worktree or use `LOCKAGE_GUARD_DISABLE=1`.

@@ -28,7 +28,7 @@ This Power achieves coordination with 3 pillars.
 For the coordination rules, follow the bundled steering `AGENTS.md` (`readPowerSteering("lockage", "AGENTS.md")`).
 For the work procedure, follow the bundled steering `lockage-workflow.md` (a copy of the `lockage-workflow` skill).
 Both are copies of the canonical source in the lockage repository's `plugins/shared/`, not content transcribed here.
-The session-start hook may also show the path of `steering/AGENTS.md` inside the clone. The content is the same, so you may read either.
+The session-start hook shows the path of `AGENTS.md` that `setup kiro` embedded (`--agents-md`): the target's `.kiro/steering/AGENTS.md` if present, otherwise the installed Power's `~/.kiro/powers/installed/<source folder name>/steering/AGENTS.md`. If that file does not exist, the hook says so. The content is the same, so you may read either.
 If they diverge, the Power and the clone's revisions are out of sync, so follow the Power's side readable via `readPowerSteering` and tell the user about the drift.
 However, if the target repository's `AGENTS.md` has a lockage section, prefer it as that repository's rule.
 
@@ -145,8 +145,8 @@ npx -y lockage setup kiro
 
 This generates `lockage-guard.json` (main-tree edit guard) and
 `lockage-session.json` (`SessionStart` context injection) in the target repository's `.kiro/hooks/`. The command is of the form `npx -y lockage hook ...`, and
-**no manual replacement of absolute paths is needed** (the session hook's `--agents-md` is filled with the absolute path of
-the target repository's `.kiro/steering/AGENTS.md`). If a hook with the same content already exists, it is `unchanged`; if the content differs, it is not overwritten
+**no manual replacement of absolute paths is needed** (the session hook's `--agents-md` is filled with the target repository's `.kiro/steering/AGENTS.md` if it exists, otherwise with
+the installed Power's `steering/AGENTS.md` found by `name: "lockage"` under `~/.kiro/powers/installed/*/` (if several match, the first by folder name that has `steering/AGENTS.md`); you can also pass `--agents-md <path>` explicitly, and a `warning:` line is printed if none is found). If a hook with the same content already exists, it is `unchanged`; if the content differs, it is not overwritten
 until you add `--force`. Even if you run it inside a worktree, the hooks are placed in the main repository's `.kiro/hooks/`.
 
 Registering the MCP server (the `mcp.json` of `npx -y lockage`) is needed separately (see Prerequisites). If you do not use the hooks and
@@ -170,7 +170,7 @@ so neither a clone nor `npm run build` is needed.
   (keep the rules of `main-tree-guard.md` yourself).
 - **Alternative when not using setup.** When `npx -y lockage` is unavailable/you want to adjust the generated files by hand, copy the
   bundled templates in the clone's `plugins/kiro/hooks/` into the target's `.kiro/hooks/`. Replace `lockage-session.json`'s
-  `--agents-md "<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>"` with the absolute path of the target's `.kiro/steering/AGENTS.md`
+  `--agents-md "<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>"` with the absolute path of `AGENTS.md` (the target's `.kiro/steering/AGENTS.md`, or the Power's installed `steering/AGENTS.md`)
   (`lockage-guard.json` needs no replacement). For the procedure, see "Kiro (Power)" in the lockage repository's `plugins/README.md`.
 - Node.js `>= 22.5`.
 - The DB (ledger) storage location uses the default `~/.lockage/lockage.sqlite` (the parent directory is created automatically).
