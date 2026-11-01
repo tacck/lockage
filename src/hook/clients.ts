@@ -291,8 +291,15 @@ export function kiroSession(stdin: string, agentsMd: string): string | null {
   const st = repoState(payload.cwd || process.cwd());
   if (st === null) return null; // inject nothing outside a git repository
   let text = buildContext(st, { agentsMd, readTool: 'Read', header: KIRO_HEADER });
+  text += agentsMdDiagnostic(agentsMd);
   text += kiroGuardDiagnostic(st.mainRoot ?? st.toplevel);
   return text;
+}
+
+/** --agents-md が指定されているのに存在しない場合、黙らず警告を1行返す(それ以外は空文字)。 */
+function agentsMdDiagnostic(agentsMd: string): string {
+  if (agentsMd === '' || existsSync(agentsMd)) return '';
+  return `- 警告: --agents-md のファイルが存在しません: ${agentsMd}。npx -y lockage setup kiro --agents-md <path> で hook を再生成してください\n`;
 }
 
 /**

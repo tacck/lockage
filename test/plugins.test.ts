@@ -132,7 +132,7 @@ test('setup kiro: the generated hook commands embed lockage@<package.json versio
   const base = mkdtempSync(join(tmpdir(), 'lockage-setup-'));
   t.after(() => rmSync(base, { recursive: true, force: true }));
 
-  const result = setupKiro({ repo: base });
+  const result = setupKiro({ repo: base, homeDir: base });
   assert.equal(result.exitCode, 0);
 
   const hooksDir = join(base, '.kiro', 'hooks');

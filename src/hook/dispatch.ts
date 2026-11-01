@@ -35,7 +35,7 @@ type Client = 'claude' | 'antigravity' | 'kiro';
 
 const USAGE =
   `lockage hook <guard|session> --client <claude|antigravity|kiro> [--event pre|post] [--agents-md <path>]\n` +
-  `lockage setup kiro [--repo <path>] [--force]\n\n` +
+  `lockage setup kiro [--repo <path>] [--force] [--agents-md <path>]\n\n` +
   `hook:\n` +
   `  guard    Guard for editing the main working tree. Pass the hook payload JSON on stdin.\n` +
   `  session  Context injection at session start. Pass the hook payload JSON on stdin.\n` +
@@ -44,7 +44,8 @@ const USAGE =
   `  --agents-md  path to the canonical coordination rules (AGENTS.md) (only placed in the text)\n\n` +
   `setup kiro:\n` +
   `  --repo <path>  the target repository root (default cwd)\n` +
-  `  --force        overwrite an existing hook definition without confirmation\n`;
+  `  --force        overwrite an existing hook definition without confirmation\n` +
+  `  --agents-md <path>  AGENTS.md to embed in the session hook (default: the target's .kiro/steering/AGENTS.md, else the installed Power's steering/AGENTS.md)\n`;
 
 /** Write usage to stderr and exit non-zero (does not fall back to MCP). */
 function usageError(msg: string): never {
@@ -207,6 +208,7 @@ function dispatchSetup(sub: string | undefined, rest: string[]): void {
     options: {
       repo: { type: 'string' },
       force: { type: 'boolean' },
+      'agents-md': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -218,7 +220,7 @@ function dispatchSetup(sub: string | undefined, rest: string[]): void {
   }
 
   try {
-    const result = setupKiro({ repo: values.repo, force: values.force });
+    const result = setupKiro({ repo: values.repo, force: values.force, agentsMd: values['agents-md'] });
     for (const line of result.lines) process.stdout.write(line + '\n');
     process.exitCode = result.exitCode;
   } catch (e) {
