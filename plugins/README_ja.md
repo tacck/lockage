@@ -270,7 +270,7 @@ MCP サーバも hook も npm 公開物を `npx -y lockage` で起動するの�
 3. **hook を `.kiro/hooks/` に置く。** 主経路は、導入先リポジトリで `npx -y lockage setup kiro` を実行することである。
    これで `.kiro/hooks/lockage-guard.json`（本流ツリー編集ガード）と `lockage-session.json`（`SessionStart` の文脈注入）が
    生成される。各 `action.command` は `npx -y lockage hook <guard|session> --client kiro ...` 形で、**絶対パスの手置換は要らない**
-   （session hook の `--agents-md` は次の順で決まる: 明示指定 `--agents-md <path>`、導入先の `.kiro/steering/AGENTS.md`（あれば）、無ければ `~/.kiro/powers/installed/*/` から `POWER.md` の front matter の `name: "lockage"` で探した Power の `steering/AGENTS.md`。フォルダ名は導入元のフォルダ名になるので決め打ちしない。Power で導入した場合、導入先に `.kiro/steering/AGENTS.md` は無いので Power のインストール先が使われる。どれも見つからなければ `setup kiro` が `warning:` 行を出し、session hook も存在しない `--agents-md` を黙って案内せずその旨を出す）。既存の同名ファイルがあると、
+   （session hook の `--agents-md` は次の順で決まる: 明示指定 `--agents-md <path>`、導入先の `.kiro/steering/AGENTS.md`（あれば）、無ければ `~/.kiro/powers/installed/*/` から `POWER.md` の front matter の `name: "lockage"` で探した Power の `steering/AGENTS.md`。フォルダ名は導入元のフォルダ名になるので決め打ちしない。`name: "lockage"` の Power が複数ある場合は、フォルダ名の昇順で最初の、`steering/AGENTS.md` が実在するものを使う（無い Power は飛ばす）。Power で導入した場合、導入先に `.kiro/steering/AGENTS.md` は無いので Power のインストール先が使われる。どれも見つからなければ `setup kiro` が `warning:` 行を出し、session hook も存在しない `--agents-md` を黙って案内せずその旨を出す）。既存の同名ファイルがあると、
    内容が同じなら `unchanged`、違えば `--force` を付けるまで上書きしない。worktree の中で実行しても、hook は本体リポジトリの
    `.kiro/hooks/` に置く。この経路なら hook のために clone する必要はない（`npx` が npm 公開物を取得して起動する）。
    hook が無くても作業はできるが、本流ツリーの編集は止まらない（`main-tree-guard.md` の決まりを自分で守る）。

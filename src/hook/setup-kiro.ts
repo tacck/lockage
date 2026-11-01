@@ -112,13 +112,20 @@ function readPowerName(powerMdPath: string): string | null {
   }
   const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (fm === null) return null;
-  const m = /^name:\s*["']?([^"'\r\n]+?)["']?\s*$/m.exec(fm[1]);
-  return m === null ? null : m[1];
+  const line = /^name:[ \t]*(.*)$/m.exec(fm[1]);
+  if (line === null) return null;
+  const raw = line[1].trim();
+  // 引用符付き(行末コメントは閉じ引用符の後ろなので無視される)
+  const quoted = /^(["'])(.*?)\1/.exec(raw);
+  if (quoted !== null) return quoted[2].trim();
+  // 引用符なし: 行末コメント(空白 + #)を除く
+  const bare = raw.replace(/\s+#.*$/, '').trim();
+  return bare === '' ? null : bare;
 }
 
 /**
  * ~/.kiro/powers/installed/ 配下から、POWER.md の front matter が `name: "lockage"` のフォルダを探し、
- * その steering/AGENTS.md の絶対パスを返す。フォルダ名は決め打ちしない(導入元のフォルダ名になるため)。
+ * その steering/AGENTS.md の絶対パスを返す。該当が複数ある場合はフォルダ名の昇順で、steering/AGENTS.md が存在する最初のものを採用する。フォルダ名は決め打ちしない(導入元のフォルダ名になるため)。
  * 見つからなければ null。
  */
 export function findPowerAgentsMd(home: string): string | null {

@@ -146,7 +146,7 @@ npx -y lockage setup kiro
 This generates `lockage-guard.json` (main-tree edit guard) and
 `lockage-session.json` (`SessionStart` context injection) in the target repository's `.kiro/hooks/`. The command is of the form `npx -y lockage hook ...`, and
 **no manual replacement of absolute paths is needed** (the session hook's `--agents-md` is filled with the target repository's `.kiro/steering/AGENTS.md` if it exists, otherwise with
-the installed Power's `steering/AGENTS.md` found by `name: "lockage"` under `~/.kiro/powers/installed/*/`; you can also pass `--agents-md <path>` explicitly, and a `warning:` line is printed if none is found). If a hook with the same content already exists, it is `unchanged`; if the content differs, it is not overwritten
+the installed Power's `steering/AGENTS.md` found by `name: "lockage"` under `~/.kiro/powers/installed/*/` (if several match, the first by folder name that has `steering/AGENTS.md`); you can also pass `--agents-md <path>` explicitly, and a `warning:` line is printed if none is found). If a hook with the same content already exists, it is `unchanged`; if the content differs, it is not overwritten
 until you add `--force`. Even if you run it inside a worktree, the hooks are placed in the main repository's `.kiro/hooks/`.
 
 Registering the MCP server (the `mcp.json` of `npx -y lockage`) is needed separately (see Prerequisites). If you do not use the hooks and

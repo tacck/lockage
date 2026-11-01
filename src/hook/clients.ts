@@ -296,10 +296,10 @@ export function kiroSession(stdin: string, agentsMd: string): string | null {
   return text;
 }
 
-/** --agents-md が指定されているのに存在しない場合、黙らず警告を1行返す(それ以外は空文字)。 */
+/** --agents-md が指定されているのに存在しない場合、黙らず警告を1行返す(それ以外は空文字)。session 出力の他行に合わせて英語。 */
 function agentsMdDiagnostic(agentsMd: string): string {
   if (agentsMd === '' || existsSync(agentsMd)) return '';
-  return `- 警告: --agents-md のファイルが存在しません: ${agentsMd}。npx -y lockage setup kiro --agents-md <path> で hook を再生成してください\n`;
+  return `- Warning: the --agents-md file does not exist: ${agentsMd}. Run npx -y lockage setup kiro --agents-md <path> to regenerate the hook.\n`;
 }
 
 /**
