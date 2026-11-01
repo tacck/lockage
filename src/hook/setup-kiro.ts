@@ -15,7 +15,8 @@
  * structure makes it silently a no-op.
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { repoState } from './repo.js';
 import { readPackageVersion } from '../version.js';
@@ -34,6 +35,10 @@ export interface SetupKiroOptions {
   repo?: string;
   // Overwrite existing files without confirmation.
   force?: boolean;
+  // 協調ルール(AGENTS.md)のパスを明示指定する。指定時は自動探索より優先する。
+  agentsMd?: string;
+  // Power のインストール先を探すホームディレクトリ(テスト用。既定は os.homedir())。
+  homeDir?: string;
 }
 
 /** The per-file processing result. */
@@ -81,8 +86,7 @@ function guardDef(): KiroHookDef {
 }
 
 /** Build the contents of lockage-session.json (1 SessionStart hook; embed base's steering path in --agents-md). */
-function sessionDef(base: string): KiroHookDef {
-  const agentsMd = join(base, '.kiro', 'steering', 'AGENTS.md');
+function sessionDef(agentsMd: string): KiroHookDef {
   return {
     version: 'v1',
     hooks: [
@@ -95,6 +99,72 @@ function sessionDef(base: string): KiroHookDef {
         },
       },
     ],
+  };
+}
+
+/** POWER.md の front matter から `name` の値を取り出す(無ければ null)。 */
+function readPowerName(powerMdPath: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(powerMdPath, { encoding: 'utf8' });
+  } catch {
+    return null;
+  }
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (fm === null) return null;
+  const line = /^name:[ \t]*(.*)$/m.exec(fm[1]);
+  if (line === null) return null;
+  const raw = line[1].trim();
+  // 引用符付き(行末コメントは閉じ引用符の後ろなので無視される)
+  const quoted = /^(["'])(.*?)\1/.exec(raw);
+  if (quoted !== null) return quoted[2].trim();
+  // 引用符なし: 行末コメント(空白 + #)を除く
+  const bare = raw.replace(/\s+#.*$/, '').trim();
+  return bare === '' ? null : bare;
+}
+
+/**
+ * ~/.kiro/powers/installed/ 配下から、POWER.md の front matter が `name: "lockage"` のフォルダを探し、
+ * その steering/AGENTS.md の絶対パスを返す。該当が複数ある場合はフォルダ名の昇順で、steering/AGENTS.md が存在する最初のものを採用する。フォルダ名は決め打ちしない(導入元のフォルダ名になるため)。
+ * 見つからなければ null。
+ */
+export function findPowerAgentsMd(home: string): string | null {
+  const installed = join(home, '.kiro', 'powers', 'installed');
+  let entries: string[];
+  try {
+    entries = readdirSync(installed).sort();
+  } catch {
+    return null;
+  }
+  for (const dir of entries) {
+    if (readPowerName(join(installed, dir, 'POWER.md')) !== 'lockage') continue;
+    const candidate = join(installed, dir, 'steering', 'AGENTS.md');
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * hook に埋める AGENTS.md のパスを決める。優先順位: --agents-md 明示 > 導入先 .kiro/steering/AGENTS.md
+ * > Power のインストール先。どれも無ければ導入先の既定パスを返し、警告を付ける。
+ */
+function resolveAgentsMd(base: string, opts: SetupKiroOptions): { path: string; warning: string | null } {
+  if (opts.agentsMd !== undefined && opts.agentsMd !== '') {
+    const path = resolve(opts.agentsMd);
+    return {
+      path,
+      warning: existsSync(path) ? null : `warning: --agents-md で指定したファイルが存在しません: ${path}`,
+    };
+  }
+  const local = join(base, '.kiro', 'steering', 'AGENTS.md');
+  if (existsSync(local)) return { path: local, warning: null };
+  const fromPower = findPowerAgentsMd(opts.homeDir ?? homedir());
+  if (fromPower !== null) return { path: fromPower, warning: null };
+  return {
+    path: local,
+    warning:
+      `warning: AGENTS.md が見つかりません(${local} と ~/.kiro/powers/installed/*/ の name: "lockage" の Power を探しました)。` +
+      ' 既定のパスを埋めましたが存在しません。--agents-md <path> で明示するか、Power を導入してから再実行してください',
   };
 }
 
@@ -143,12 +213,14 @@ export function setupKiro(opts: SetupKiroOptions): SetupKiroResult {
   const hooksDir = join(base, '.kiro', 'hooks');
   mkdirSync(hooksDir, { recursive: true });
 
+  const agentsMd = resolveAgentsMd(base, opts);
   const targets: Array<{ path: string; content: string }> = [
     { path: join(hooksDir, 'lockage-guard.json'), content: serialize(guardDef()) },
-    { path: join(hooksDir, 'lockage-session.json'), content: serialize(sessionDef(base)) },
+    { path: join(hooksDir, 'lockage-session.json'), content: serialize(sessionDef(agentsMd.path)) },
   ];
 
   const lines: string[] = [];
+  if (agentsMd.warning !== null) lines.push(agentsMd.warning);
   let needsForce = false;
   for (const { path, content } of targets) {
     const result = writeHookFile(path, content, force);

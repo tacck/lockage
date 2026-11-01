@@ -270,7 +270,7 @@ MCP サーバも hook も npm 公開物を `npx -y lockage` で起動するの�
 3. **hook を `.kiro/hooks/` に置く。** 主経路は、導入先リポジトリで `npx -y lockage setup kiro` を実行することである。
    これで `.kiro/hooks/lockage-guard.json`（本流ツリー編集ガード）と `lockage-session.json`（`SessionStart` の文脈注入）が
    生成される。各 `action.command` は `npx -y lockage hook <guard|session> --client kiro ...` 形で、**絶対パスの手置換は要らない**
-   （session hook の `--agents-md` には導入先の `.kiro/steering/AGENTS.md` の絶対パスが埋まる）。既存の同名ファイルがあると、
+   （session hook の `--agents-md` は次の順で決まる: 明示指定 `--agents-md <path>`、導入先の `.kiro/steering/AGENTS.md`（あれば）、無ければ `~/.kiro/powers/installed/*/` から `POWER.md` の front matter の `name: "lockage"` で探した Power の `steering/AGENTS.md`。フォルダ名は導入元のフォルダ名になるので決め打ちしない。`name: "lockage"` の Power が複数ある場合は、フォルダ名の昇順で最初の、`steering/AGENTS.md` が実在するものを使う（無い Power は飛ばす）。Power で導入した場合、導入先に `.kiro/steering/AGENTS.md` は無いので Power のインストール先が使われる。どれも見つからなければ `setup kiro` が `warning:` 行を出し、session hook も存在しない `--agents-md` を黙って案内せずその旨を出す）。既存の同名ファイルがあると、
    内容が同じなら `unchanged`、違えば `--force` を付けるまで上書きしない。worktree の中で実行しても、hook は本体リポジトリの
    `.kiro/hooks/` に置く。この経路なら hook のために clone する必要はない（`npx` が npm 公開物を取得して起動する）。
    hook が無くても作業はできるが、本流ツリーの編集は止まらない（`main-tree-guard.md` の決まりを自分で守る）。
@@ -278,14 +278,14 @@ MCP サーバも hook も npm 公開物を `npx -y lockage` で起動するの�
    **setup を使わない場合の代替**: `npx -y lockage` が使えない（オフライン・社内レジストリ制約など）／生成物を手で
    調整したいときは、clone の `plugins/kiro/hooks/` にある同梱雛形（`lockage-guard.json`・`lockage-session.json`）を
    導入先の `.kiro/hooks/` にコピーする。`lockage-session.json` の `--agents-md "<ABSOLUTE_PATH_TO_STEERING_AGENTS_MD>"` を、
-   導入先の `.kiro/steering/AGENTS.md` の絶対パスに置き換える（`lockage-guard.json` は `--agents-md` を使わないので置換不要）。
+   `AGENTS.md` の絶対パス（導入先の `.kiro/steering/AGENTS.md`、または Power の `~/.kiro/powers/installed/<導入元フォルダ名>/steering/AGENTS.md`）に置き換える（`lockage-guard.json` は `--agents-md` を使わないので置換不要）。
 4. **steering の読み込み。** `POWER.md` の Steering 節が、`AGENTS.md`・`lockage-workflow.md`・`coordination` /
    `main-tree-guard` / `publish-pr` をいつ読むか案内する。steering は inclusion mode「常に読み込む（Always）」を推奨。
 
 - **動作確認**（0.5 系の構成では、lockage では実機で確かめていない）:
   - lockage 運用中のリポジトリで新しいセッションを始め、「lockage Power の hook から示された見出しと、協調ルールの正本のパスを、
     ツールを使わずにそのまま答えて」と尋ねると、見出し「lockage 協調開発（lockage Kiro Power）」と
-    導入先の `.kiro/steering/AGENTS.md`（setup kiro が `--agents-md` に埋めた絶対パス）を答えること。答えられなければ、
+    setup kiro が `--agents-md` に埋めた `AGENTS.md` の絶対パス（Power 導入なら `~/.kiro/powers/installed/<導入元フォルダ名>/steering/AGENTS.md`）を答えること。答えられなければ、
     `.kiro/hooks/lockage-session.json` が置かれ `command` が `npx -y lockage hook session --client kiro ...` 形になっているかを
     確かめる（hook の失敗は stderr に `[lockage-plugin]` で始まる行として出る）。
   - 同じリポジトリの本流ツリーのファイルを編集させると拒否され、worktree で進めるか `LOCKAGE_GUARD_DISABLE=1` を使うかを

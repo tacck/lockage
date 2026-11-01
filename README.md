@@ -51,7 +51,7 @@ For the detailed install procedure of each client, see [`plugins/README.md`](plu
 
 ### Kiro Powers
 
-Register `plugins/kiro` as a Power, reflect the bundled `mcp.json` into Kiro's MCP configuration (no placeholder replacement is needed), and place the hooks into the target's `.kiro/hooks/` with `npx -y lockage setup kiro`. See the [Kiro (Power)](plugins/README.md#kiro-power) section of `plugins/README.md`.
+Register `plugins/kiro` as a Power, reflect the bundled `mcp.json` into Kiro's MCP configuration (no placeholder replacement is needed), and place the hooks into the target's `.kiro/hooks/` with `npx -y lockage setup kiro` (options: `--repo <path>`, `--force`, `--agents-md <path>`). The `AGENTS.md` path embedded in the session hook is resolved in this order: the explicit `--agents-md`, the target's `.kiro/steering/AGENTS.md`, then the `steering/AGENTS.md` of the lockage Power auto-detected under `~/.kiro/powers/installed/`. If none is found, `setup kiro` prints a `warning:` line. See the [Kiro (Power)](plugins/README.md#kiro-power) section of `plugins/README.md`.
 
 ### Claude Code Plugin
 
